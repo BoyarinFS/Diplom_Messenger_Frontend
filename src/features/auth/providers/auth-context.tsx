@@ -7,7 +7,8 @@ import {
   useEffect,
   type ReactNode,
 } from 'react';
-import { api, type Account } from '@/shared/lib';
+import { api } from '@/shared/api';
+import type { Account } from '@/shared/types';
 
 interface AuthContextType {
   user: Account | null;

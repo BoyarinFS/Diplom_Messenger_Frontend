@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:8080/api/v1';
+const API_BASE_URL = 'http://localhost:80/back-yoptagramm-service/api/v1';
 
 import type {
   AuthRequest,
@@ -16,7 +16,7 @@ import type {
   UpdateChatRequest,
   CreateDmRequest,
   UpdateAccountRequest,
-} from './types';
+} from '@/shared/types';
 
 class ApiClient {
   private token: string | null = null;
@@ -24,6 +24,9 @@ class ApiClient {
   setToken(token: string) {
     this.token = token;
     if (typeof window !== 'undefined') {
+      // На localhost (http) cookie с флагом `secure` не сохраняется, из-за чего токен "пропадает"
+      // и все защищённые запросы начинают падать (401). Для фронта проще и надёжнее хранить токен
+      // в localStorage (см. AuthProvider).
       localStorage.setItem('auth_token', token);
     }
   }
@@ -58,22 +61,45 @@ class ApiClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const url = `${API_BASE_URL}${endpoint}`;
+    const response = await fetch(url, {
       ...options,
       headers,
     });
 
     if (!response.ok) {
-      const error = await response
-        .json()
-        .catch(() => ({ message: 'Request failed' }));
-      throw new Error(error.message || `HTTP ${response.status}`);
+      let details: any = null;
+
+      // Пытаемся прочитать тело ответа максимально безопасно:
+      // - если JSON, покажем его
+      // - если нет, покажем текст
+      try {
+        const contentType = response.headers.get('content-type') ?? '';
+        if (contentType.includes('application/json')) {
+          details = await response.json();
+        } else {
+          const text = await response.text();
+          details = text ? { message: text } : null;
+        }
+      } catch {
+        details = null;
+      }
+
+      const messageFromBody =
+        details && typeof details === 'object'
+          ? (details.message as string | undefined) ?? JSON.stringify(details)
+          : undefined;
+
+      throw new Error(
+        messageFromBody ??
+          `Request failed: ${response.status} ${response.statusText} (${url})`,
+      );
     }
 
     return response.json();
   }
 
-  // Auth endpoints (не требуют токена)
+  // Auth endpoints
   async login(credentials: AuthRequest): Promise<AuthResponse> {
     return this.request<AuthResponse>('/auth/login', {
       method: 'POST',
@@ -87,8 +113,6 @@ class ApiClient {
       body: JSON.stringify(data),
     });
   }
-
-  // Все остальные endpoints требуют токен (добавляется автоматически в методе request)
 
   // Account endpoints
   async getAccount(accountId: string): Promise<Account> {
@@ -223,7 +247,10 @@ class ApiClient {
   }
 
   // Message endpoints
-  async getChatMessages(chatId: string, page = 0): Promise<Message[]> {
+  async getChatMessages(
+    chatId: string,
+    page = 0,
+  ): Promise<Message[] | { messages: Message[] }> {
     return this.request(`/chats/${chatId}/messages?page=${page}`);
   }
 
@@ -231,7 +258,7 @@ class ApiClient {
     chatId: string,
     threadRootId: string,
     page = 0,
-  ): Promise<Message[]> {
+  ): Promise<Message[] | { messages: Message[] }> {
     return this.request(
       `/chats/${chatId}/messages/thread/${threadRootId}?page=${page}`,
     );

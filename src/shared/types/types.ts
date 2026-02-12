@@ -7,8 +7,8 @@ export interface RegistrationRequest {
   username: string;
   password: string;
   email: string;
-  firstName: string;
-  lastName: string;
+  firstname: string;
+  lastname: string;
 }
 
 export interface AuthResponse {
@@ -20,8 +20,8 @@ export interface Account {
   uuid: string;
   username: string;
   email: string;
-  firstName: string;
-  lastName: string;
+  firstname: string;
+  lastname: string;
   bio?: string;
   profilePicture?: string;
   createdAt: string;
@@ -53,8 +53,8 @@ export interface ChatFull {
 export interface ChatMember {
   uuid: string;
   username: string;
-  firstName: string;
-  lastName: string;
+  firstname: string;
+  lastname: string;
   profilePicture?: string;
   roleId: string;
   roleName: string;
@@ -104,8 +104,9 @@ export interface CreateThreadRequest {
 export interface CreateChatRequest {
   name: string;
   description?: string;
-  isPublic: boolean;
-  memberIds: string[];
+  adminId: string;
+  membersIds: string[];
+  public: boolean;
 }
 
 export interface UpdateChatRequest {
@@ -117,11 +118,11 @@ export interface UpdateChatRequest {
 
 export interface CreateDmRequest {
   authorUsername: string;
-  receiverId: string;
+  receiverUsername: string;
 }
 
 export interface UpdateAccountRequest {
-  firstName?: string;
-  lastName?: string;
+  firstname?: string;
+  lastname?: string;
   bio?: string;
 }
