@@ -2,20 +2,22 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/features/auth';
-import { AuthForm } from '@/components/auth-form';
+import { AuthForm } from '@/features/auth/components/auth-form';
 import { ChatList } from '@/features/chat';
 import { ChatWindow } from '@/features/chat';
 import { NewChatDialog } from '@/features/chat';
 import { ThemeSelector } from '@/components/theme-selector';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/shared/ui';
 import { LogOut } from 'lucide-react';
 
 export default function Home() {
   const { user, isLoading, logout } = useAuth();
   const [selectedChatId, setSelectedChatId] = useState<string | undefined>();
   const [selectedChatName, setSelectedChatName] = useState<string>('');
+  const [selectedChatIsDm, setSelectedChatIsDm] = useState(false);
   const [showNewChatDialog, setShowNewChatDialog] = useState(false);
   const [showChatList, setShowChatList] = useState(true);
+  const [chatsVersion, setChatsVersion] = useState(0);
 
   if (isLoading) {
     return (
@@ -29,9 +31,10 @@ export default function Home() {
     return <AuthForm />;
   }
 
-  const handleChatSelect = (chatId: string, chatName?: string) => {
+  const handleChatSelect = (chatId: string, chatName: string, isDm: boolean) => {
     setSelectedChatId(chatId);
-    setSelectedChatName(chatName || 'Chat');
+    setSelectedChatName(chatName);
+    setSelectedChatIsDm(isDm);
     setShowChatList(false);
   };
 
@@ -41,7 +44,7 @@ export default function Home() {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-background">
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
       {/* Top bar */}
       <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-background">
         <h1 className="text-xl font-bold text-foreground">Yoptagramm</h1>
@@ -55,31 +58,32 @@ export default function Home() {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Chat list - hidden on mobile when chat is selected */}
         <div
-          className={`w-full md:w-80 lg:w-96 ${
+          className={`w-full md:w-80 lg:w-96 h-full ${
             showChatList ? 'block' : 'hidden md:block'
           }`}
         >
           <ChatList
-            onChatSelect={(chatId: string) => {
-              // In a real app, you'd fetch chat details here
-              handleChatSelect(chatId, 'Chat Name');
-            }}
+            onChatSelect={handleChatSelect}
             selectedChatId={selectedChatId}
             onNewChat={() => setShowNewChatDialog(true)}
+            refreshToken={chatsVersion}
           />
         </div>
 
         {/* Chat window */}
         <div
-          className={`flex-1 ${!showChatList ? 'block' : 'hidden md:block'}`}
+          className={`flex-1 flex flex-col h-full min-h-0 ${
+            !showChatList ? 'block' : 'hidden md:block'
+          }`}
         >
           {selectedChatId ? (
             <ChatWindow
               chatId={selectedChatId}
               chatName={selectedChatName}
+              isDm={selectedChatIsDm}
               onBack={handleBack}
             />
           ) : (
@@ -104,7 +108,11 @@ export default function Home() {
       <NewChatDialog
         open={showNewChatDialog}
         onOpenChange={setShowNewChatDialog}
-        onChatCreated={(chatId: string) => handleChatSelect(chatId, 'New Chat')}
+        onChatCreated={(chatId: string, chatName: string) => {
+          // Обновляем список чатов и сразу открываем новый чат
+          setChatsVersion((v) => v + 1);
+          handleChatSelect(chatId, chatName);
+        }}
       />
     </div>
   );

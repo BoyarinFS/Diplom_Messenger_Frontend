@@ -40,3 +40,5 @@ next-env.d.ts
 .mvn/
 mvnw
 mvnw.cmd
+node_modules
+/yoptagramm-frontend-new_tg

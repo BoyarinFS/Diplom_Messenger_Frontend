@@ -1,21 +1,21 @@
-"use client"
+'use client';
 
-import { useTheme } from "@/lib/theme-context"
-import { Button } from "@/components/ui/button"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Palette, Check } from "lucide-react"
+import { useTheme } from '@/shared/lib';
+import { Button } from '@/shared/ui';
+import { Popover, PopoverContent, PopoverTrigger } from '@/shared/ui';
+import { Palette, Check } from 'lucide-react';
 
 const themes = [
-  { value: "light" as const, label: "Светлая", color: "bg-white border" },
-  { value: "dark" as const, label: "Тёмная", color: "bg-gray-900" },
-  { value: "purple" as const, label: "Фиолетовая", color: "bg-purple-600" },
-  { value: "orange" as const, label: "Оранжевая", color: "bg-orange-500" },
-  { value: "green" as const, label: "Зелёная", color: "bg-green-600" },
-  { value: "pink" as const, label: "Розовая", color: "bg-pink-500" },
-]
+  { value: 'light' as const, label: 'Светлая', color: 'bg-white border' },
+  { value: 'dark' as const, label: 'Тёмная', color: 'bg-gray-900' },
+  { value: 'purple' as const, label: 'Фиолетовая', color: 'bg-purple-600' },
+  { value: 'orange' as const, label: 'Оранжевая', color: 'bg-orange-500' },
+  { value: 'green' as const, label: 'Зелёная', color: 'bg-green-600' },
+  { value: 'pink' as const, label: 'Розовая', color: 'bg-pink-500' },
+];
 
 export function ThemeSelector() {
-  const { theme, setTheme } = useTheme()
+  const { theme, setTheme } = useTheme();
 
   return (
     <Popover>
@@ -41,5 +41,5 @@ export function ThemeSelector() {
         </div>
       </PopoverContent>
     </Popover>
-  )
+  );
 }
