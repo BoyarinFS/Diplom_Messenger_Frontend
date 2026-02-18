@@ -1,25 +1,31 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/features/auth';
+
 import { AuthForm } from '@/features/auth/components/auth-form';
+
 import { ChatList } from '@/features/chat';
 import { ChatWindow } from '@/features/chat';
 import { NewChatDialog } from '@/features/chat';
 import { ThemeSelector } from '@/components/theme-selector';
-import { Button } from '@/shared/ui';
+import { Button } from '@/components/ui/button';
 import { LogOut } from 'lucide-react';
 
 export default function Home() {
   const { user, isLoading, logout } = useAuth();
   const [selectedChatId, setSelectedChatId] = useState<string | undefined>();
   const [selectedChatName, setSelectedChatName] = useState<string>('');
-  const [selectedChatIsDm, setSelectedChatIsDm] = useState(false);
   const [showNewChatDialog, setShowNewChatDialog] = useState(false);
   const [showChatList, setShowChatList] = useState(true);
-  const [chatsVersion, setChatsVersion] = useState(0);
+  const [mounted, setMounted] = useState(false);
 
-  if (isLoading) {
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Prevent hydration mismatch - show loading until client is ready
+  if (!mounted || isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <p className="text-muted-foreground">Loading...</p>
@@ -27,14 +33,18 @@ export default function Home() {
     );
   }
 
-  if (!user) {
+  // Show auth form if no user or user needs verification
+  if (!user || user.status === 'PENDING_VERIFICATION') {
     return <AuthForm />;
   }
 
-  const handleChatSelect = (chatId: string, chatName: string, isDm: boolean) => {
+
+
+
+
+  const handleChatSelect = (chatId: string, chatName?: string) => {
     setSelectedChatId(chatId);
-    setSelectedChatName(chatName);
-    setSelectedChatIsDm(isDm);
+    setSelectedChatName(chatName || 'Chat');
     setShowChatList(false);
   };
 
@@ -44,7 +54,7 @@ export default function Home() {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-background overflow-hidden">
+    <div className="h-screen flex flex-col bg-background">
       {/* Top bar */}
       <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-background">
         <h1 className="text-xl font-bold text-foreground">Yoptagramm</h1>
@@ -58,32 +68,31 @@ export default function Home() {
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex overflow-hidden min-h-0">
+      <div className="flex-1 flex overflow-hidden">
         {/* Chat list - hidden on mobile when chat is selected */}
         <div
-          className={`w-full md:w-80 lg:w-96 h-full ${
+          className={`w-full md:w-80 lg:w-96 ${
             showChatList ? 'block' : 'hidden md:block'
           }`}
         >
           <ChatList
-            onChatSelect={handleChatSelect}
+            onChatSelect={(chatId: string) => {
+              // In a real app, you'd fetch chat details here
+              handleChatSelect(chatId, 'Chat Name');
+            }}
             selectedChatId={selectedChatId}
             onNewChat={() => setShowNewChatDialog(true)}
-            refreshToken={chatsVersion}
           />
         </div>
 
         {/* Chat window */}
         <div
-          className={`flex-1 flex flex-col h-full min-h-0 ${
-            !showChatList ? 'block' : 'hidden md:block'
-          }`}
+          className={`flex-1 ${!showChatList ? 'block' : 'hidden md:block'}`}
         >
           {selectedChatId ? (
             <ChatWindow
               chatId={selectedChatId}
               chatName={selectedChatName}
-              isDm={selectedChatIsDm}
               onBack={handleBack}
             />
           ) : (
@@ -108,11 +117,7 @@ export default function Home() {
       <NewChatDialog
         open={showNewChatDialog}
         onOpenChange={setShowNewChatDialog}
-        onChatCreated={(chatId: string, chatName: string) => {
-          // Обновляем список чатов и сразу открываем новый чат
-          setChatsVersion((v) => v + 1);
-          handleChatSelect(chatId, chatName);
-        }}
+        onChatCreated={(chatId: string) => handleChatSelect(chatId, 'New Chat')}
       />
     </div>
   );

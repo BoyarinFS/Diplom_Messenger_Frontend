@@ -1,7 +1,14 @@
+export type AccountStatus =
+  | 'PENDING_VERIFICATION'
+  | 'ACTIVE'
+  | 'BLOCKED'
+  | 'SUSPENDED';
+
 export interface AuthRequest {
   login: string;
   password: string;
 }
+
 
 export interface RegistrationRequest {
   username: string;
@@ -13,8 +20,19 @@ export interface RegistrationRequest {
 
 export interface AuthResponse {
   token: string;
-  account: Account;
+  email: string;
+  account: {
+    uuid: string;
+    username: string;
+    firstname: string;
+    lastname: string;
+    about?: string;
+    birthday?: string;
+  };
+  status: AccountStatus;
 }
+
+
 
 export interface Account {
   uuid: string;
@@ -25,7 +43,9 @@ export interface Account {
   bio?: string;
   profilePicture?: string;
   createdAt: string;
+  status: AccountStatus;
 }
+
 
 export interface ChatShortcut {
   uuid: string;
@@ -125,4 +145,12 @@ export interface UpdateAccountRequest {
   firstname?: string;
   lastname?: string;
   bio?: string;
+}
+
+export interface VerifyEmailRequest {
+  code: string;
+}
+
+export interface ResendVerificationRequest {
+  email: string;
 }
