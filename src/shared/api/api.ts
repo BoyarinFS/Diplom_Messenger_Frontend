@@ -1,10 +1,12 @@
-const API_BASE_URL = 'http://localhost:80/back-yoptagramm-service/api/v1';
+// Используем прокси через Next.js API routes для работы с куками (same-origin)
+const API_BASE_URL = '/api/proxy';
 
 import type {
   AuthRequest,
   RegistrationRequest,
   AuthResponse,
   Account,
+  AccountStatus,
   ChatShortcut,
   ChatFull,
   ChatMember,
@@ -19,33 +21,6 @@ import type {
 } from '@/shared/types';
 
 class ApiClient {
-  private token: string | null = null;
-
-  setToken(token: string) {
-    this.token = token;
-    if (typeof window !== 'undefined') {
-      // На localhost (http) cookie с флагом `secure` не сохраняется, из-за чего токен "пропадает"
-      // и все защищённые запросы начинают падать (401). Для фронта проще и надёжнее хранить токен
-      // в localStorage (см. AuthProvider).
-      localStorage.setItem('auth_token', token);
-    }
-  }
-
-  getToken(): string | null {
-    if (this.token) return this.token;
-    if (typeof window !== 'undefined') {
-      this.token = localStorage.getItem('auth_token');
-    }
-    return this.token;
-  }
-
-  clearToken() {
-    this.token = null;
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('auth_token');
-    }
-  }
-
   private async request<T>(
     endpoint: string,
     options: RequestInit = {},
@@ -55,24 +30,24 @@ class ApiClient {
       ...(options.headers as Record<string, string>),
     };
 
-    // Токен добавляется автоматически во ВСЕ запросы если он есть
-    const token = this.getToken();
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+    // Кука auth_token отправляется автоматически браузером
+    // (HttpOnly кука установлена на / пути)
 
-    const url = `${API_BASE_URL}${endpoint}`;
+    // Убираем /api/v1 префикс так как прокси уже добавляет его
+    const cleanEndpoint = endpoint.startsWith('/api/v1') 
+      ? endpoint.replace('/api/v1', '') 
+      : endpoint;
+    const url = `${API_BASE_URL}${cleanEndpoint}`;
+    
     const response = await fetch(url, {
       ...options,
       headers,
+      // credentials не нужен - same-origin запрос
     });
 
     if (!response.ok) {
       let details: any = null;
 
-      // Пытаемся прочитать тело ответа максимально безопасно:
-      // - если JSON, покажем его
-      // - если нет, покажем текст
       try {
         const contentType = response.headers.get('content-type') ?? '';
         if (contentType.includes('application/json')) {
@@ -99,18 +74,71 @@ class ApiClient {
     return response.json();
   }
 
-  // Auth endpoints
+  // Auth endpoints (через API routes для установки кук)
   async login(credentials: AuthRequest): Promise<AuthResponse> {
-    return this.request<AuthResponse>('/auth/login', {
+    const res = await fetch('/api/auth/login', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(credentials),
     });
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ message: 'Login failed' }));
+      throw new Error(error.message || 'Login failed');
+    }
+
+    return res.json();
   }
 
   async register(data: RegistrationRequest): Promise<AuthResponse> {
-    return this.request<AuthResponse>('/auth/reg', {
+    const res = await fetch('/api/auth/register', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
+    });
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ message: 'Registration failed' }));
+      throw new Error(error.message || 'Registration failed');
+    }
+
+    return res.json();
+  }
+
+  async logout(): Promise<void> {
+    const res = await fetch('/api/auth/logout', {
+      method: 'POST',
+    });
+
+    if (!res.ok) {
+      throw new Error('Logout failed');
+    }
+  }
+
+  async setOAuthToken(token: string, user: Account): Promise<void> {
+    const res = await fetch('/api/auth/oauth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, user }),
+    });
+
+    if (!res.ok) {
+      throw new Error('Failed to set OAuth token');
+    }
+  }
+
+  // Прямые запросы к бэкенду (с автоматической отправкой кук)
+  async verifyEmail(code: string, email: string): Promise<void> {
+    return this.request('/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ code, email }),
+    });
+  }
+
+  async resendVerificationCode(email: string): Promise<void> {
+    return this.request('/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
     });
   }
 
@@ -168,7 +196,6 @@ class ApiClient {
     });
   }
 
-  // DM endpoints
   // DM endpoints
   async createDmChat(data: CreateDmRequest): Promise<ChatFull> {
     return this.request('/dm', {
