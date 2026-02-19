@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yoptagramm-frontend
+    ports:
+      - "3001:3000"
+    environment:
+      # URL бэкенда для серверных API routes
+      # yopta-nginx - имя nginx контейнера бэкенда (порт 80)
+      - BACKEND_URL=http://yopta-nginx/back-yoptagramm-service/api/v1
+
+
+    networks:
+      - yoptagramm-network
+    restart: unless-stopped
+
+  # Раскомментируйте когда будет готов backend
+  # backend:
+  #   build:
+  #     context: ../yoptagramm-backend
+  #     dockerfile: Dockerfile
+  #   container_name: yoptagramm-backend
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     - SPRING_PROFILES_ACTIVE=docker
+  #     - SERVER_PORT=8080
+  #   networks:
+  #     - yoptagramm-network
+  #   restart: unless-stopped
+
+networks:
+  yoptagramm-network:
+    name: 'common-network'
+    driver: bridge
+    external: true
