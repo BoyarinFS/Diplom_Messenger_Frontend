@@ -4,8 +4,8 @@ import type { NextRequest } from 'next/server';
 // Публичные роуты (не требуют авторизации)
 const publicRoutes = ['/', '/oauth2/redirect', '/api/auth/login', '/api/auth/register', '/api/auth/oauth', '/api/auth/logout', '/api/auth/me'];
 
+export default function middleware(request: NextRequest) {
 
-export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Пропускаем публичные роуты (точное совпадение или начало пути)
