@@ -136,11 +136,11 @@ class ApiClient {
   }
 
   async resendVerificationCode(email: string): Promise<void> {
-    return this.request('/auth/resend-verification', {
+    return this.request(`/auth/resend-verification?email=${encodeURIComponent(email)}`, {
       method: 'POST',
-      body: JSON.stringify({ email }),
     });
   }
+
 
   // Account endpoints
   async getAccount(accountId: string): Promise<Account> {

@@ -150,9 +150,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const resendVerificationCode = async () => {
-    if (!verificationEmail) return;
-    await api.resendVerificationCode(verificationEmail);
+    // Используем email из verificationEmail или из user объекта
+    const emailToUse = verificationEmail || user?.email;
+    if (!emailToUse) {
+      throw new Error('Email не найден. Пожалуйста, войдите снова.');
+    }
+    await api.resendVerificationCode(emailToUse);
   };
+
 
 
   const closeVerificationDialog = () => {
