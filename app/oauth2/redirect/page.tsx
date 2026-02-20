@@ -3,7 +3,8 @@
 import { useEffect, useState, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, CheckCircle2, XCircle } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/shared/ui/card';
+
 
 function OAuthRedirectContent() {
 
