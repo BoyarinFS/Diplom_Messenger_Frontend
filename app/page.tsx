@@ -9,7 +9,8 @@ import { ChatList } from '@/features/chat';
 import { ChatWindow } from '@/features/chat';
 import { NewChatDialog } from '@/features/chat';
 import { ThemeSelector } from '@/components/theme-selector';
-import { Button } from '@/components/ui/button';
+import { Button } from '@/shared/ui/button';
+
 import { LogOut } from 'lucide-react';
 
 export default function Home() {

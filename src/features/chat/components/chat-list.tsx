@@ -12,15 +12,16 @@ interface ChatListProps {
   onChatSelect: (chatId: string, chatName: string, isDm: boolean) => void;
   selectedChatId?: string;
   onNewChat: () => void;
-  refreshToken: number;
+  refreshToken?: number;
 }
 
 export function ChatList({
   onChatSelect,
   selectedChatId,
   onNewChat,
-  refreshToken,
+  refreshToken = 0,
 }: ChatListProps) {
+
   const { user } = useAuth();
   const [chats, setChats] = useState<ChatShortcut[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
