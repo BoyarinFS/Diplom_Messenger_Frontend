@@ -61,8 +61,10 @@ export async function uploadFile(
       status: 'uploading',
     });
 
-    // Step 2: Upload file directly to MinIO
-    await uploadToMinIO(url, file, (progress) => {
+    // Step 2: Upload file directly to MinIO using publicUrl (accessible from browser)
+    // publicUrl is the external URL that browser can access
+    // url is the internal presigned URL for direct upload
+    await uploadToMinIO(publicUrl, file, (progress) => {
       onProgress?.({
         fileId,
         fileName: file.name,
