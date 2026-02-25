@@ -1,11 +1,9 @@
 import type React from 'react';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
-import { Analytics } from '@vercel/analytics/next';
 import { AuthProvider } from '@/features/auth/providers/auth-context';
 import { ThemeProvider } from '@/shared/lib';
 import './globals.css';
-import { Toaster } from 'sonner';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -43,8 +41,6 @@ export default function RootLayout({
         <ThemeProvider>
           <AuthProvider>{children}</AuthProvider>
         </ThemeProvider>
-        <Toaster />
-        <Analytics />
       </body>
     </html>
   );

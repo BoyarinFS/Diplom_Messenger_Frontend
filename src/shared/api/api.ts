@@ -18,7 +18,14 @@ import type {
   UpdateChatRequest,
   CreateDmRequest,
   UpdateAccountRequest,
+  FileMetadata,
+  UploadUrlRequest,
+  UploadUrlResponse,
+  ConfirmUploadRequest,
+  AttachmentType,
+  DownloadUrlResponse,
 } from '@/shared/types';
+
 
 class ApiClient {
   private async request<T>(
@@ -337,7 +344,75 @@ class ApiClient {
       method: 'DELETE',
     });
   }
+
+  // File management endpoints
+  async getUploadUrl(request: UploadUrlRequest): Promise<UploadUrlResponse> {
+    return this.request('/files/upload-url', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  async confirmUpload(request: ConfirmUploadRequest): Promise<FileMetadata> {
+    return this.request('/files/confirm', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  async getFile(fileId: string): Promise<FileMetadata> {
+    return this.request(`/files/${fileId}`);
+  }
+
+  async deleteFile(fileId: string): Promise<void> {
+    return this.request(`/files/${fileId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getDownloadUrl(fileId: string): Promise<DownloadUrlResponse> {
+    return this.request(`/files/${fileId}/download-url`);
+  }
+
+  async getUserFiles(userId: string): Promise<FileMetadata[]> {
+    return this.request(`/files/user/${userId}`);
+  }
+
+  async getEntityAttachments(
+    type: AttachmentType,
+    id: string,
+  ): Promise<FileMetadata[]> {
+    return this.request(
+      `/files/attachments?type=${type}&id=${id}`,
+    );
+  }
+
+  async attachFile(
+    fileId: string,
+    type: AttachmentType,
+    id: string,
+  ): Promise<void> {
+    return this.request(
+      `/files/${fileId}/attach?type=${type}&id=${id}`,
+      {
+        method: 'POST',
+      },
+    );
+  }
+
+  async detachFile(
+    fileId: string,
+    type: AttachmentType,
+    id: string,
+  ): Promise<void> {
+    return this.request(
+      `/files/${fileId}/attach?type=${type}&id=${id}`,
+      {
+        method: 'DELETE',
+      },
+    );
+  }
 }
 
 export const api = new ApiClient();
-export type { Message, ChatShortcut, Account };
+export type { Message, ChatShortcut, Account, FileMetadata };
