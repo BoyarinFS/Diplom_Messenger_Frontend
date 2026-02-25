@@ -105,7 +105,9 @@ export interface Message {
   parentMessageId?: string;
   threadRootMessageId?: string;
   threadMessagesCount?: number;
+  attachments?: FileMetadata[];
 }
+
 
 export interface CreateMessageRequest {
   content: string;

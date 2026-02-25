@@ -298,19 +298,23 @@ class ApiClient {
     );
   }
 
-  async sendMessage(chatId: string, content: string): Promise<Message> {
+  async sendMessage(chatId: string, content: string, fileIds?: string[]): Promise<Message> {
     return this.request(`/chats/${chatId}/messages/regular`, {
       method: 'POST',
-      body: JSON.stringify({ text: content }),
+      body: JSON.stringify({ 
+        text: content,
+        fileIds 
+      }),
     });
   }
 
-  async sendReply(chatId: string, data: CreateReplyRequest): Promise<Message> {
+  async sendReply(chatId: string, data: CreateReplyRequest, fileIds?: string[]): Promise<Message> {
     return this.request(`/chats/${chatId}/messages/reply`, {
       method: 'POST',
       body: JSON.stringify({
         text: data.content,
         parentMessageId: data.repliedMessageId,
+        fileIds,
       }),
     });
   }
@@ -318,15 +322,18 @@ class ApiClient {
   async sendThreadMessage(
     chatId: string,
     data: CreateThreadRequest,
+    fileIds?: string[],
   ): Promise<Message> {
     return this.request(`/chats/${chatId}/messages/thread`, {
       method: 'POST',
       body: JSON.stringify({
         text: data.content,
         threadRootMessageId: data.threadRootMessageId,
+        fileIds,
       }),
     });
   }
+
 
   async updateMessage(
     chatId: string,

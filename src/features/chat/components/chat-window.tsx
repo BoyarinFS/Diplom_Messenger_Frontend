@@ -4,13 +4,16 @@ import type React from 'react';
 import { useState, useEffect, useRef } from 'react';
 import { api } from '@/shared/api';
 import { webSocketService } from '@/shared/api';
-import type { Message } from '@/shared/types';
+import type { Message, FileMetadata } from '@/shared/types';
 import { useAuth } from '@/features/auth';
-import { Send, MoreVertical, ArrowLeft, Reply, MessageSquare } from 'lucide-react';
+import { Send, MoreVertical, ArrowLeft, Reply, MessageSquare, Paperclip, X } from 'lucide-react';
 import { Button } from '@/shared/ui';
 import { Input } from '@/shared/ui';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/shared/ui';
 import { useToast } from '@/shared/ui';
+import { useFileUpload } from '@/features/file';
+import { FilePreview } from '@/features/file';
+
 
 interface ChatWindowProps {
   chatId: string;
@@ -32,8 +35,22 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   const [isWsConnected, setIsWsConnected] = useState(false);
   const [peerStatus, setPeerStatus] = useState<'ONLINE' | 'OFF' | null>(null);
   const [peerLastTime, setPeerLastTime] = useState<string | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<FileMetadata[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const { upload } = useFileUpload({
+    onSuccess: (file) => {
+      setAttachedFiles((prev) => [...prev, file]);
+      toast({ title: 'Файл загружен', description: file.fileName });
+    },
+    onError: (error) => {
+      toast({ title: 'Ошибка загрузки', description: error.message, variant: 'destructive' });
+    },
+  });
+
 
   // Функция для безопасного форматирования времени
   const formatMessageTime = (dateString?: string) => {
@@ -227,10 +244,33 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     }
   };
 
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        await upload(file, chatId);
+      }
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const removeAttachedFile = (fileId: string) => {
+    setAttachedFiles((prev) => prev.filter((f) => f.uuid !== fileId));
+  };
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || isSending) return;
+    if ((!newMessage.trim() && attachedFiles.length === 0) || isSending) return;
 
+    const fileIds = attachedFiles.map((f) => f.uuid);
+    
     // СОЗДАЕМ ОПТИМИСТИЧНОЕ СООБЩЕНИЕ
     const optimisticMessage: Message = {
       uuid: `optimistic-${Date.now()}-${Math.random()}`,
@@ -243,6 +283,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         : replyTo
           ? 'reply'
           : 'regular',
+      attachments: attachedFiles,
     };
 
     try {
@@ -258,6 +299,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       }
 
       setNewMessage('');
+      setAttachedFiles([]);
 
       // ОТПРАВЛЯЕМ ЗАПРОС К БЕКУ
       let response: Message;
@@ -266,7 +308,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         response = await api.sendThreadMessage(chatId, {
           content: newMessage.trim(),
           threadRootMessageId: activeThread.uuid,
-        });
+        }, fileIds);
         // ЗАМЕНЯЕМ ОПТИМИСТИЧНОЕ СООБЩЕНИЕ НА РЕАЛЬНОЕ
         setThreadMessages((prev) =>
           prev.map((msg) =>
@@ -277,7 +319,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         response = await api.sendReply(chatId, {
           content: newMessage.trim(),
           repliedMessageId: replyTo.uuid,
-        });
+        }, fileIds);
         setMessages((prev) =>
           prev.map((msg) =>
             msg.uuid === optimisticMessage.uuid ? response : msg,
@@ -285,7 +327,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         );
         setReplyTo(null);
       } else {
-        response = await api.sendMessage(chatId, newMessage.trim());
+        response = await api.sendMessage(chatId, newMessage.trim(), fileIds);
         setMessages((prev) => {
           const merged = prev.map((msg) =>
             msg.uuid === optimisticMessage.uuid
@@ -327,6 +369,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       setIsSending(false);
     }
   };
+
   const MessageItem = ({
     message,
     isThreadView = false,
@@ -368,6 +411,21 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
             )}
 
             <p className="text-sm break-words">{message.text}</p>
+
+            {/* Отображение вложенных файлов */}
+            {message.attachments && message.attachments.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {message.attachments.map((file) => (
+                  <FilePreview
+                    key={file.uuid}
+                    file={file}
+                    compact
+                    onClick={() => window.open(file.url, '_blank')}
+                  />
+                ))}
+              </div>
+            )}
+
 
             {timeLabel && (
               <div className="flex items-center justify-end gap-2 mt-1">
@@ -543,7 +601,42 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
             </Button>
           </div>
         )}
+        {/* Прикрепленные файлы */}
+        {attachedFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {attachedFiles.map((file) => (
+              <div key={file.uuid} className="relative">
+                <FilePreview file={file} compact />
+                <button
+                  type="button"
+                  onClick={() => removeAttachedFile(file.uuid)}
+                  className="absolute -top-1 -right-1 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center text-xs"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        
         <form onSubmit={handleSendMessage} className="flex gap-2">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            className="hidden"
+            multiple
+            accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
+          />
+          <Button
+            type="button"
+            size="icon"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isSending || isUploading}
+          >
+            <Paperclip className="h-5 w-5" />
+          </Button>
           <Input
             placeholder={
               activeThread ? 'Reply to thread...' : 'Type a message...'
@@ -556,11 +649,12 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
           <Button
             type="submit"
             size="icon"
-            disabled={!newMessage.trim() || isSending}
+            disabled={(!newMessage.trim() && attachedFiles.length === 0) || isSending || isUploading}
           >
             <Send className="h-5 w-5" />
           </Button>
         </form>
+
       </div>
     </div>
   );
