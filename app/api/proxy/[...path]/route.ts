@@ -76,4 +76,5 @@ async function proxyRequest(
   const data = await response.json().catch(() => null);
 
   return NextResponse.json(data, { status: response.status });
+
 }

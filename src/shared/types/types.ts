@@ -18,6 +18,33 @@ export interface RegistrationRequest {
   lastname: string;
 }
 
+export interface KeyBundleRequest {
+  identityPublicKey: string;
+  identityPrivateKey: string;
+  signedPreKeyPublic: string;
+  signedPreKeyPrivate: string;
+  signedPreKeySignature: string;
+  oneTimePreKeys: string[];
+}
+
+export interface RegistrationRequestWithKeys {
+  username: string;
+  email: string;
+  password: string;
+  firstname: string;
+  lastname: string;
+  about?: string;
+  keyBundleRequest: KeyBundleRequest;
+}
+
+export interface EncryptedPrivateKeys {
+  identityPrivateKey: string;
+  signedPreKeyPrivate: string;
+  oneTimePreKeys: string[];
+}
+
+
+
 export interface AuthResponse {
   token: string;
   email: string;
@@ -30,7 +57,12 @@ export interface AuthResponse {
     birthday?: string;
   };
   status: AccountStatus;
+  accountKeysResponse?: {
+    identityPrivateKey: string;
+    signedPreKeyPrivate: string;
+  };
 }
+
 
 
 
@@ -141,7 +173,9 @@ export interface UpdateChatRequest {
 export interface CreateDmRequest {
   authorUsername: string;
   receiverUsername: string;
+  chatIdentifierName: string;
 }
+
 
 export interface UpdateAccountRequest {
   firstname?: string;

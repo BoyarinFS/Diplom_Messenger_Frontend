@@ -1,9 +1,9 @@
-// Используем прокси через Next.js API routes для работы с куками (same-origin)
 const API_BASE_URL = '/api/proxy';
 
 import type {
   AuthRequest,
   RegistrationRequest,
+  RegistrationRequestWithKeys,
   AuthResponse,
   Account,
   AccountStatus,
@@ -37,10 +37,6 @@ class ApiClient {
       ...(options.headers as Record<string, string>),
     };
 
-    // Кука auth_token отправляется автоматически браузером
-    // (HttpOnly кука установлена на / пути)
-
-    // Убираем /api/v1 префикс так как прокси уже добавляет его
     const cleanEndpoint = endpoint.startsWith('/api/v1') 
       ? endpoint.replace('/api/v1', '') 
       : endpoint;
@@ -49,7 +45,7 @@ class ApiClient {
     const response = await fetch(url, {
       ...options,
       headers,
-      // credentials не нужен - same-origin запрос
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -81,12 +77,12 @@ class ApiClient {
     return response.json();
   }
 
-  // Auth endpoints (через API routes для установки кук)
   async login(credentials: AuthRequest): Promise<AuthResponse> {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(credentials),
+      credentials: 'include',
     });
 
     if (!res.ok) {
@@ -102,6 +98,23 @@ class ApiClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
+      credentials: 'include',
+    });
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ message: 'Registration failed' }));
+      throw new Error(error.message || 'Registration failed');
+    }
+
+    return res.json();
+  }
+
+  async registerWithKeys(data: RegistrationRequestWithKeys): Promise<AuthResponse> {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      credentials: 'include',
     });
 
     if (!res.ok) {
@@ -115,6 +128,7 @@ class ApiClient {
   async logout(): Promise<void> {
     const res = await fetch('/api/auth/logout', {
       method: 'POST',
+      credentials: 'include',
     });
 
     if (!res.ok) {
@@ -127,6 +141,7 @@ class ApiClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token, user }),
+      credentials: 'include',
     });
 
     if (!res.ok) {
@@ -134,7 +149,6 @@ class ApiClient {
     }
   }
 
-  // Прямые запросы к бэкенду (с автоматической отправкой кук)
   async verifyEmail(code: string, email: string): Promise<void> {
     return this.request('/auth/verify-email', {
       method: 'POST',
@@ -148,9 +162,8 @@ class ApiClient {
     });
   }
 
-
-  // Account endpoints
   async getAccount(accountId: string): Promise<Account> {
+
     return this.request(`/accounts/${accountId}`);
   }
 
@@ -178,8 +191,19 @@ class ApiClient {
     });
   }
 
-  // Chat endpoints
+  async getAccountKeys(accountId: string): Promise<{
+    identityPrivateKey: string;
+    signedPreKeyPrivate: string;
+  } | null> {
+    try {
+      return await this.request(`/accounts/${accountId}/keys`);
+    } catch {
+      return null;
+    }
+  }
+
   async createChat(data: CreateChatRequest): Promise<ChatFull> {
+
     return this.request('/chats', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -203,7 +227,6 @@ class ApiClient {
     });
   }
 
-  // DM endpoints
   async createDmChat(data: CreateDmRequest): Promise<ChatFull> {
     return this.request('/dm', {
       method: 'POST',
@@ -217,7 +240,6 @@ class ApiClient {
     });
   }
 
-  // Chat member endpoints
   async addChatMember(
     chatId: string,
     memberId: string,
@@ -246,7 +268,6 @@ class ApiClient {
     });
   }
 
-  // Chat role endpoints
   async getChatRoles(chatId: string): Promise<ChatCustomRole[]> {
     return this.request(`/chats/${chatId}/roles`);
   }
@@ -280,7 +301,6 @@ class ApiClient {
     });
   }
 
-  // Message endpoints
   async getChatMessages(
     chatId: string,
     page = 0,
