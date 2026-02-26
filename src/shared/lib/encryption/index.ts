@@ -1,13 +1,15 @@
-export { signalProtocol, SignalProtocolManager, getSignalProtocol } from './signal-protocol';
-export { keyStorage, KeyStorage } from './key-storage';
+// Signal Protocol Encryption Module
+export { SignalProtocolManager, signalProtocol, getSignalProtocol } from './signal-protocol';
+export { X3DH } from './x3dh';
+export { DoubleRatchet } from './double-ratchet';
+export { keyStorage } from './key-storage';
 export type {
   KeyBundleRequest,
-  RegistrationRequestWithKeys,
+  UserKeyBundle,
   EncryptedPrivateKeys,
   PublicKeyBundle,
-  UserKeyBundle,
-  CryptoSession,
   EncryptedMessage,
-  EncryptedKeyResponse,
-  RecipientPublicKeys,
+  CryptoSession,
 } from './types';
+export type { X3DHResult } from './x3dh';
+export type { RatchetSession } from './double-ratchet';

@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { api } from '@/shared/api';
 import { type Account } from '@/shared/types';
 import { useAuth } from '@/features/auth/providers/auth-context';
+import { useChatEncryption } from '@/features/chat/hooks/use-chat-encryption';
+
 import { Button } from '@/shared/ui/button';
 import { Input } from '@/shared/ui/input';
 import {
@@ -31,10 +33,12 @@ export function NewChatDialog({
   onChatCreated,
 }: NewChatDialogProps) {
   const { user: currentUser } = useAuth();
+  const { initializeDmEncryption, isLoading: isEncrypting } = useChatEncryption();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Account[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+
 
   // Group chat state
   const [groupName, setGroupName] = useState('');
@@ -87,22 +91,26 @@ export function NewChatDialog({
         chatIdentifierName: `dm_${currentUser.username}_${recipientAccount.username}`,
       });
 
-
       console.log('✅ DM Chat created:', response);
-      // В заголовке и списке чатов показываем имя собеседника
+      
+      // Initialize encryption for the new DM chat
+      // Note: We need the user's password to decrypt our private keys
+      // For now, we'll skip encryption initialization here and do it on first message
+      // or when the chat is opened
+      
       const displayName = `${recipientAccount.firstname} ${recipientAccount.lastname}`.trim() ||
         `@${recipientAccount.username}`;
-      onChatCreated(response.uuid, displayName);
+      onChatCreated(response.chat.uuid, displayName);
       onOpenChange(false);
       resetForm();
     } catch (error: any) {
       console.error('❌ Failed to create DM:', error);
-      // Show user-friendly error message
       alert(`Failed to create chat: ${error.message || 'Unknown error'}`);
     } finally {
       setIsCreating(false);
     }
   };
+
 
   const handleCreateGroup = async () => {
     if (!groupName.trim()) return;
