@@ -22,9 +22,13 @@ interface ChatWindowProps {
   onBack?: () => void;
 }
 
+const PEER_HEARTBEAT_INTERVAL = 30000;
+const PEER_TIMEOUT = 120000;
+const PRESENCE_SEND_INTERVAL = 25000;
+
 export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindowProps) {
   const { user } = useAuth();
-  const { toast } = useToast();
+  const { isConnected, isStable } = useWebSocketStatus();
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -32,7 +36,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [activeThread, setActiveThread] = useState<Message | null>(null);
   const [threadMessages, setThreadMessages] = useState<Message[]>([]);
-  const [isWsConnected, setIsWsConnected] = useState(false);
   const [peerStatus, setPeerStatus] = useState<'ONLINE' | 'OFF' | null>(null);
   const [peerLastTime, setPeerLastTime] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<FileMetadata[]>([]);
@@ -40,6 +43,9 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const presenceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const peerCheckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isActiveRef = useRef(true);
 
   const { upload } = useFileUpload({
     onSuccess: (file) => {
@@ -58,38 +64,48 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     try {
       const timePart = dateString.split('T')[1]?.split('.')[0];
       return timePart?.substring(0, 5) || '';
-    } catch (error) {
+    } catch {
       return '';
     }
-  };
+  }, []);
 
-  // WebSocket обработчик новых сообщений и presence-сообщений
-  const handleNewMessage = (incoming: any) => {
-    // Обрабатываем только явно помеченные presence-сообщения,
-    // чтобы не ловить обычные сообщения, у которых тоже может быть поле status
-    if (
-      incoming &&
-      typeof incoming === 'object' &&
-      incoming.type === 'PRESENCE' &&
-      'status' in incoming
-    ) {
-      const { status, last_time, userId } = incoming as {
-        type: 'PRESENCE';
-        status: 'ONLINE' | 'OFF';
-        last_time?: string;
-        userId?: string;
-      };
+  const formatLastSeen = useCallback((timestamp: number) => {
+    const now = Date.now();
+    const diff = now - timestamp;
+    if (diff < 60000) return 'только что';
+    if (diff < 3600000) return `${Math.floor(diff / 60000)} мин назад`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)} ч назад`;
+    return new Date(timestamp).toLocaleDateString('ru-RU');
+  }, []);
 
-      // Если бек не прислал userId, безопаснее игнорировать presence,
-      // чтобы не помечать всегда самого себя как онлайн
-      if (!userId) return;
+  const sendPresenceStatus = useCallback((status: 'ONLINE' | 'OFF') => {
+    if (!user?.uuid || !isDm) return;
+    const payload: { status: 'ONLINE' | 'OFF'; userId: string; last_time?: string } = {
+      status,
+      userId: user.uuid,
+    };
+    if (status === 'OFF') {
+      const now = new Date();
+      payload.last_time = now.toLocaleString('ru-RU', {
+        day: '2-digit', month: '2-digit', year: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+      }).replace(',', '');
+    }
+    webSocketService.sendPresence(chatId, payload);
+  }, [chatId, isDm, user?.uuid]);
 
-      // Игнорируем свои же presence-сообщения
-      if (userId && userId === user?.uuid) return;
+  const handleNewMessage = useCallback((incoming: any) => {
+    if (isDm && incoming?.userId && incoming.userId !== user?.uuid) {
+      setPeerLastSeen(Date.now());
+    }
 
+    if (incoming?.type === 'PRESENCE' && 'status' in incoming) {
+      const { status, last_time, userId } = incoming;
+      if (!userId || userId === user?.uuid) return;
       if (status === 'ONLINE') {
         setPeerStatus('ONLINE');
         setPeerLastTime(null);
+        setPeerLastSeen(Date.now());
       } else if (status === 'OFF') {
         setPeerStatus('OFF');
         if (last_time) setPeerLastTime(last_time);
@@ -97,152 +113,120 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       return;
     }
 
-    const newMessage = incoming as Partial<Message> & { content?: string };
+    const newMsg = incoming as Partial<Message> & { content?: string };
     const normalized: Message = {
-      uuid: (newMessage.uuid as string) ?? `ws-${Date.now()}-${Math.random()}`,
-      text:
-        (typeof newMessage.text === 'string' && newMessage.text) ||
-        (typeof newMessage.content === 'string' && newMessage.content) ||
-        '',
-      createdAt:
-        (newMessage.createdAt as string) ?? new Date().toISOString(),
-      author: (newMessage.author as any) ?? (user as any),
-      chatId: (newMessage.chatId as string) ?? chatId,
-      messageType: (newMessage.messageType as any) ?? 'regular',
-      parentMessageId: newMessage.parentMessageId,
-      threadRootMessageId: newMessage.threadRootMessageId,
-      threadMessagesCount: newMessage.threadMessagesCount,
-      updatedAt: newMessage.updatedAt,
+      uuid: newMsg.uuid ?? `ws-${Date.now()}`,
+      text: newMsg.text || newMsg.content || '',
+      createdAt: newMsg.createdAt ?? new Date().toISOString(),
+      author: newMsg.author ?? user as any,
+      chatId: newMsg.chatId ?? chatId,
+      messageType: newMsg.messageType ?? 'regular',
+      parentMessageId: newMsg.parentMessageId,
+      threadRootMessageId: newMsg.threadRootMessageId,
+      threadMessagesCount: newMsg.threadMessagesCount,
+      updatedAt: newMsg.updatedAt,
     };
 
-    // если вдруг пришёл пустой payload — не трогаем список
     if (!normalized.text.trim()) return;
 
     setMessages((prev) => {
-      // 1) Если это ответ от сервера на наше же оптимистичное сообщение,
-      //    заменяем оптимистичное сообщение на "настоящее" вместо добавления нового.
       const optimisticIndex = prev.findIndex(
-        (msg) =>
-          msg.uuid.startsWith('optimistic-') &&
-          msg.text === normalized.text &&
-          msg.author?.uuid === user?.uuid,
+        (msg) => msg.uuid.startsWith('optimistic-') && 
+                 msg.text === normalized.text && 
+                 msg.author?.uuid === user?.uuid
       );
-
       if (optimisticIndex !== -1) {
         const next = [...prev];
         next[optimisticIndex] = normalized;
         return next;
       }
-
-      // 2) Обычное сообщение: если такое uuid уже есть — не добавляем дубль
-      if (prev.some((msg) => msg.uuid === normalized.uuid)) {
-        return prev;
-      }
-
+      if (prev.some((msg) => msg.uuid === normalized.uuid)) return prev;
       return [...prev, normalized];
     });
-  };
+  }, [chatId, isDm, user]);
 
-  useEffect(() => {
-    loadMessages();
-    setReplyTo(null);
-    setActiveThread(null);
-
-    // Подключаем WebSocket с колбэками
-    webSocketService.connect(
-      () => {
-        console.log('✅ WebSocket connected, subscribing to chat:', chatId);
-        setIsWsConnected(true);
-        webSocketService.subscribeToChat(chatId, handleNewMessage);
-
-        // При входе в личный чат отправляем статус ONLINE
-        if (isDm && user?.uuid) {
-          webSocketService.sendPresence(chatId, {
-            status: 'ONLINE',
-            userId: user.uuid,
-          });
-        }
-      },
-      (error: any) => {
-        console.error('❌ WebSocket connection failed:', error);
-        setIsWsConnected(false);
-      },
-    );
-
-    return () => {
-      // При выходе из личного чата отправляем статус OFF с last_time
-      if (isDm && user?.uuid) {
-        const now = new Date();
-        const lastTime = now
-          .toLocaleString('ru-RU', {
-            day: '2-digit',
-            month: '2-digit',
-            year: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-          })
-          .replace(',', '');
-
-        webSocketService.sendPresence(chatId, {
-          status: 'OFF',
-          last_time: lastTime,
-          userId: user.uuid,
-        });
-      }
-
-      webSocketService.unsubscribeFromChat(chatId);
-    };
-  }, [chatId, isDm, user?.uuid]);
-
-  // ФИКС СКРОЛЛА - используем отдельный ref для скролла к низу
-  // Привязываемся к длине массивов, чтобы не триггерить скролл лишний раз
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages.length, threadMessages.length]);
-
-  // ФИКС СКРОЛЛА - функция для скролла к самому низу без "тряски"
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: 'auto',
-      block: 'end',
-    });
-  };
-
-  useEffect(() => {
-    if (activeThread) {
-      loadThreadMessages(activeThread.uuid);
-    }
-  }, [activeThread]);
-
-  const loadMessages = async () => {
+  const loadMessages = useCallback(async () => {
     try {
       setIsLoading(true);
       const response = await api.getChatMessages(chatId);
-      const messages = Array.isArray(response)
-        ? response
-        : response.messages || [];
-      setMessages(messages);
-    } catch (error) {
-      console.error('Failed to load messages:', error);
+      const msgs = Array.isArray(response) ? response : response.messages || [];
+      setMessages(msgs);
+    } catch {
       setMessages([]);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [chatId]);
 
-  const loadThreadMessages = async (threadRootId: string) => {
+  const loadThreadMessages = useCallback(async (threadRootId: string) => {
     try {
       const response = await api.getThreadMessages(chatId, threadRootId);
-      const messages = Array.isArray(response)
-        ? response
-        : response.messages || [];
-      setThreadMessages(messages);
-    } catch (error) {
-      console.error('Failed to load thread messages:', error);
+      const msgs = Array.isArray(response) ? response : response.messages || [];
+      setThreadMessages(msgs);
+    } catch {
       setThreadMessages([]);
     }
-  };
+  }, [chatId]);
+
+  useEffect(() => {
+    isActiveRef.current = true;
+    loadMessages();
+    setReplyTo(null);
+    setActiveThread(null);
+
+    webSocketService.connect(
+      () => {
+        webSocketService.subscribeToChat(chatId, handleNewMessage);
+        if (isDm && user?.uuid) {
+          setTimeout(() => {
+            if (isActiveRef.current) sendPresenceStatus('ONLINE');
+          }, 500);
+          
+          presenceIntervalRef.current = setInterval(() => {
+            if (isActiveRef.current) sendPresenceStatus('ONLINE');
+          }, PRESENCE_SEND_INTERVAL);
+          
+          peerCheckIntervalRef.current = setInterval(() => {
+            if (!isActiveRef.current) return;
+            const now = Date.now();
+            if (peerLastSeen && now - peerLastSeen > PEER_TIMEOUT) {
+              if (peerStatus === 'ONLINE') setPeerStatus('OFF');
+            }
+          }, PEER_HEARTBEAT_INTERVAL);
+        }
+      },
+      () => {}
+    );
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (isDm && user?.uuid) sendPresenceStatus('OFF');
+      } else {
+        if (isDm && user?.uuid) {
+          sendPresenceStatus('ONLINE');
+          if (!webSocketService.isConnected()) webSocketService.connect();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      isActiveRef.current = false;
+      if (presenceIntervalRef.current) clearInterval(presenceIntervalRef.current);
+      if (peerCheckIntervalRef.current) clearInterval(peerCheckIntervalRef.current);
+      if (isDm && user?.uuid) sendPresenceStatus('OFF');
+      webSocketService.unsubscribeFromChat(chatId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [chatId, isDm, user?.uuid, handleNewMessage, loadMessages, sendPresenceStatus, peerLastSeen, peerStatus]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+  }, [messages.length, threadMessages.length]);
+
+  useEffect(() => {
+    if (activeThread) loadThreadMessages(activeThread.uuid);
+  }, [activeThread, loadThreadMessages]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -273,7 +257,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     
     // СОЗДАЕМ ОПТИМИСТИЧНОЕ СООБЩЕНИЕ
     const optimisticMessage: Message = {
-      uuid: `optimistic-${Date.now()}-${Math.random()}`,
+      uuid: `optimistic-${Date.now()}`,
       text: newMessage.trim(),
       author: user!,
       chatId,
@@ -288,22 +272,15 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
 
     try {
       setIsSending(true);
-
-      // СРАЗУ ДОБАВЛЯЕМ ОПТИМИСТИЧНОЕ СООБЩЕНИЕ
       if (activeThread) {
         setThreadMessages((prev) => [...prev, optimisticMessage]);
-      } else if (replyTo) {
-        setMessages((prev) => [...prev, optimisticMessage]);
       } else {
         setMessages((prev) => [...prev, optimisticMessage]);
       }
-
       setNewMessage('');
       setAttachedFiles([]);
 
-      // ОТПРАВЛЯЕМ ЗАПРОС К БЕКУ
       let response: Message;
-
       if (activeThread) {
         response = await api.sendThreadMessage(chatId, {
           content: newMessage.trim(),
@@ -329,22 +306,9 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       } else {
         response = await api.sendMessage(chatId, newMessage.trim(), fileIds);
         setMessages((prev) => {
-          const merged = prev.map((msg) =>
-            msg.uuid === optimisticMessage.uuid
-              ? ({
-                  // сохраняем локальные поля, если бэк прислал неполную структуру
-                  ...optimisticMessage,
-                  ...response,
-                  text:
-                    (response as any)?.text ??
-                    (response as any)?.content ??
-                    optimisticMessage.text,
-                  author: (response as any)?.author ?? optimisticMessage.author,
-                } as Message)
-              : msg,
+          const merged = prev.map((msg) => 
+            msg.uuid === optimisticMessage.uuid ? { ...optimisticMessage, ...response } : msg
           );
-
-          // Удаляем возможные дубликаты с тем же UUID (например, пришедшие по WS)
           const seen = new Set<string>();
           return merged.filter((m) => {
             if (seen.has(m.uuid)) return false;
@@ -353,17 +317,11 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
           });
         });
       }
-    } catch (error) {
-      console.error('Failed to send message:', error);
-      // ЕСЛИ ОШИБКА - УДАЛЯЕМ ОПТИМИСТИЧНОЕ СООБЩЕНИЕ
+    } catch {
       if (activeThread) {
-        setThreadMessages((prev) =>
-          prev.filter((msg) => msg.uuid !== optimisticMessage.uuid),
-        );
+        setThreadMessages((prev) => prev.filter((msg) => msg.uuid !== optimisticMessage.uuid));
       } else {
-        setMessages((prev) =>
-          prev.filter((msg) => msg.uuid !== optimisticMessage.uuid),
-        );
+        setMessages((prev) => prev.filter((msg) => msg.uuid !== optimisticMessage.uuid));
       }
     } finally {
       setIsSending(false);
@@ -379,37 +337,24 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   }) => {
     const isOwn = message.author?.uuid === user?.uuid;
     const isReply = message.messageType === 'reply';
-    const isThreadRoot = message.messageType === 'thread_root';
     const timeLabel = formatMessageTime(message.createdAt);
 
     return (
-      <div
-        className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'} mb-4`}
-      >
-        <div
-          className={`flex ${
-            isOwn ? 'justify-end' : 'justify-start'
-          } max-w-[80%]`}
-        >
-          <div
-            className={`rounded-2xl px-4 py-2 ${
-              isOwn
-                ? 'bg-primary text-primary-foreground rounded-br-sm'
-                : 'bg-muted text-foreground rounded-bl-sm'
-            }`}
-          >
+      <div className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'} mb-4`}>
+        <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'} max-w-[80%]`}>
+          <div className={`rounded-2xl px-4 py-2 ${
+            isOwn ? 'bg-primary text-primary-foreground rounded-br-sm' : 'bg-muted text-foreground rounded-bl-sm'
+          }`}>
             {!isOwn && message.author && (
               <p className="text-xs font-semibold mb-1 opacity-70">
                 {message.author.firstname} {message.author.lastname}
               </p>
             )}
-
             {isReply && message.parentMessageId && (
               <div className="mb-2 p-2 rounded bg-black/10 text-xs border-l-2 border-primary-foreground/50">
                 <p className="opacity-70">Replying to message...</p>
               </div>
             )}
-
             <p className="text-sm break-words">{message.text}</p>
 
             {/* Отображение вложенных файлов */}
@@ -428,36 +373,22 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
 
 
             {timeLabel && (
-              <div className="flex items-center justify-end gap-2 mt-1">
-                <p className={`text-xs ${isOwn ? 'opacity-70' : 'opacity-50'}`}>
-                  {timeLabel}
-                </p>
-              </div>
+              <p className={`text-xs mt-1 ${isOwn ? 'opacity-70' : 'opacity-50'}`}>{timeLabel}</p>
             )}
           </div>
-
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
-              >
+              <Button variant="ghost" size="icon" className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity">
                 <MoreVertical className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align={isOwn ? 'end' : 'start'}>
               <DropdownMenuItem onClick={() => setReplyTo(message)}>
-                <Reply className="mr-2 h-4 w-4" />
-                Reply
+                <Reply className="mr-2 h-4 w-4" /> Reply
               </DropdownMenuItem>
               {!isThreadView && (
                 <DropdownMenuItem onClick={() => setActiveThread(message)}>
-                  <MessageSquare className="mr-2 h-4 w-4" />
-                  Thread{' '}
-                  {message.threadMessagesCount
-                    ? `(${message.threadMessagesCount})`
-                    : ''}
+                  <MessageSquare className="mr-2 h-4 w-4" /> Thread {message.threadMessagesCount ? `(${message.threadMessagesCount})` : ''}
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
@@ -467,35 +398,37 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     );
   };
 
+  const renderPeerStatus = () => {
+    if (!isDm) {
+      if (!isConnected) return 'Connecting...';
+      if (!isStable) return 'Connecting...';
+      return 'Online';
+    }
+    if (peerStatus === 'ONLINE') {
+      return <><span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse" /> Online</>;
+    }
+    if (peerLastTime) return `Last seen: ${peerLastTime}`;
+    if (peerLastSeen) return `Last seen ${formatLastSeen(peerLastSeen)}`;
+    return 'Offline';
+  };
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-background">
-      {/* Header */}
       <div className="p-4 border-b border-border flex items-center gap-3">
         {onBack && (
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={onBack}
-            className="md:hidden"
-          >
+          <Button size="icon" variant="ghost" onClick={onBack} className="md:hidden">
             <ArrowLeft className="h-5 w-5" />
           </Button>
         )}
         {activeThread ? (
           <div className="flex items-center gap-3 flex-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setActiveThread(null)}
-            >
+            <Button variant="ghost" size="icon" onClick={() => setActiveThread(null)}>
               <ArrowLeft className="h-5 w-5" />
             </Button>
             <div>
               <h2 className="font-semibold">Thread</h2>
               {activeThread.author?.firstname && (
-                <p className="text-xs text-muted-foreground">
-                  Replying to {activeThread.author.firstname}
-                </p>
+                <p className="text-xs text-muted-foreground">Replying to {activeThread.author.firstname}</p>
               )}
             </div>
           </div>
@@ -506,43 +439,19 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
             </div>
             <div className="flex-1">
               <h2 className="font-semibold text-foreground">{chatName}</h2>
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                {isDm ? (
-                  peerStatus === 'ONLINE' ? (
-                    <>
-                      <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
-                      Online
-                    </>
-                  ) : peerLastTime ? (
-                    <>Last seen: {peerLastTime}</>
-                  ) : (
-                    'Offline'
-                  )
-                ) : isWsConnected ? (
-                  'Online'
-                ) : (
-                  'Connecting...'
-                )}
-              </p>
+              <p className="text-xs text-muted-foreground flex items-center gap-1">{renderPeerStatus()}</p>
             </div>
-            <Button size="icon" variant="ghost">
-              <MoreVertical className="h-5 w-5" />
-            </Button>
+            <Button size="icon" variant="ghost"><MoreVertical className="h-5 w-5" /></Button>
           </>
         )}
       </div>
 
-      {/* Messages - ФИКС СКРОЛЛА */}
       <div className="flex-1 min-h-0 overflow-y-auto custom-scroll">
         <div className="p-4">
           {isLoading ? (
-            <div className="text-center text-muted-foreground py-8">
-              Loading messages...
-            </div>
+            <div className="text-center text-muted-foreground py-8">Loading messages...</div>
           ) : (activeThread ? threadMessages : messages).length === 0 ? (
-            <div className="text-center text-muted-foreground py-8">
-              No messages yet. Start the conversation!
-            </div>
+            <div className="text-center text-muted-foreground py-8">No messages yet. Start the conversation!</div>
           ) : (
             <div className="space-y-1">
               {activeThread && (
@@ -551,54 +460,26 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
                 </div>
               )}
               {(activeThread ? threadMessages : messages)
-                .filter(
-                  (message) =>
-                    message &&
-                    (typeof message.text === 'string'
-                      ? message.text.trim().length > 0
-                      : !!message.author),
-                )
-                .map((message, index) => {
-                  const key = message.uuid ?? `msg-${index}`;
-
-                  return (
-                    <div key={key} className="group">
-                      <MessageItem
-                        message={message}
-                        isThreadView={!!activeThread}
-                      />
-                    </div>
-                  );
-                })}
-              {/* ФИКС СКРОЛЛА - невидимый элемент для скролла к низу */}
+                .filter((msg) => msg && (typeof msg.text === 'string' ? msg.text.trim().length > 0 : !!msg.author))
+                .map((msg, idx) => (
+                  <div key={msg.uuid ?? `msg-${idx}`} className="group">
+                    <MessageItem message={msg} isThreadView={!!activeThread} />
+                  </div>
+                ))}
               <div ref={messagesEndRef} />
             </div>
           )}
         </div>
       </div>
 
-      {/* Input - ФИКС ПОЗИЦИОНИРОВАНИЯ */}
       <div className="p-4 border-t border-border bg-background">
         {replyTo && (
           <div className="flex items-center justify-between mb-2 p-2 bg-accent rounded-lg">
             <div className="text-sm">
-              {replyTo.author?.firstname && (
-                <span className="font-semibold text-primary">
-                  Replying to {replyTo.author.firstname}
-                </span>
-              )}
-              <p className="text-muted-foreground truncate max-w-[200px]">
-                {replyTo.text}
-              </p>
+              {replyTo.author?.firstname && <span className="font-semibold text-primary">Replying to {replyTo.author.firstname}</span>}
+              <p className="text-muted-foreground truncate max-w-[200px]">{replyTo.text}</p>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setReplyTo(null)}
-              className="h-6 w-6"
-            >
-              <span className="sr-only">Cancel reply</span>×
-            </Button>
+            <Button variant="ghost" size="icon" onClick={() => setReplyTo(null)} className="h-6 w-6">×</Button>
           </div>
         )}
         {/* Прикрепленные файлы */}
@@ -638,12 +519,10 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
             <Paperclip className="h-5 w-5" />
           </Button>
           <Input
-            placeholder={
-              activeThread ? 'Reply to thread...' : 'Type a message...'
-            }
+            placeholder={activeThread ? 'Reply to thread...' : 'Type a message...'}
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
-            disabled={isSending}
+            disabled={isSending || !isConnected}
             className="flex-1"
           />
           <Button

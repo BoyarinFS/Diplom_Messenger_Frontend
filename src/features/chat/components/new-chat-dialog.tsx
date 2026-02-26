@@ -84,7 +84,9 @@ export function NewChatDialog({
       const response = await api.createDmChat({
         authorUsername: currentUser.username,
         receiverUsername: recipientAccount.username,
+        chatIdentifierName: `dm_${currentUser.username}_${recipientAccount.username}`,
       });
+
 
       console.log('✅ DM Chat created:', response);
       // В заголовке и списке чатов показываем имя собеседника

@@ -2,6 +2,8 @@ import type React from 'react';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import { AuthProvider } from '@/features/auth/providers/auth-context';
+import { ProtectedRoute } from '@/features/auth/components/protected-route';
+
 import { ThemeProvider } from '@/shared/lib';
 import './globals.css';
 
@@ -39,9 +41,12 @@ export default function RootLayout({
     <html lang="en">
       <body className={`font-sans antialiased`} suppressHydrationWarning={true}>
         <ThemeProvider>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            <ProtectedRoute>{children}</ProtectedRoute>
+          </AuthProvider>
         </ThemeProvider>
       </body>
+
     </html>
   );
 }
