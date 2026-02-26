@@ -22,6 +22,9 @@ const nextConfig = {
     ],
   },
 
+  turbopack: {},
+
+
   webpack: (config, { isServer, dev }) => {
     config.module.rules.push({
       test: /\.(java|xml|properties)$/,

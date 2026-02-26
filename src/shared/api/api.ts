@@ -17,6 +17,8 @@ import type {
   CreateChatRequest,
   UpdateChatRequest,
   CreateDmRequest,
+  CreateDmResponse,
+  GetDmKeysResponse,
   UpdateAccountRequest,
   FileMetadata,
   UploadUrlRequest,
@@ -25,6 +27,7 @@ import type {
   AttachmentType,
   DownloadUrlResponse,
 } from '@/shared/types';
+
 
 const pendingRequests = new Map<string, Promise<unknown>>();
 const getCache = new Map<string, { data: unknown; timestamp: number }>();
@@ -267,11 +270,15 @@ class ApiClient {
     });
   }
 
-  async createDmChat(data: CreateDmRequest): Promise<ChatFull> {
+  async createDmChat(data: CreateDmRequest): Promise<CreateDmResponse> {
     return this.request('/dm', {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  }
+
+  async getDmKeys(chatId: string): Promise<GetDmKeysResponse> {
+    return this.request(`/dm/${chatId}/keys`, {}, true);
   }
 
   async deleteDmChat(chatId: string): Promise<void> {
@@ -279,6 +286,7 @@ class ApiClient {
       method: 'DELETE',
     });
   }
+
 
   async addChatMember(chatId: string, memberId: string, roleId?: string): Promise<ChatMember> {
     return this.request(`/chats/${chatId}/members`, {

@@ -46,10 +46,11 @@ export async function uploadFile(
     // Step 1: Get presigned URL from backend
     const uploadUrlRequest: UploadUrlRequest = {
       fileName: file.name,
-      contentType: file.type,
+      mimeType: file.type,
       fileSize: file.size,
       chatId,
     };
+
 
     const { url, objectKey, publicUrl } = await api.getUploadUrl(uploadUrlRequest);
 
