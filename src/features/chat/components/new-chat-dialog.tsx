@@ -39,7 +39,6 @@ export function NewChatDialog({
   const [isSearching, setIsSearching] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
 
-
   // Group chat state
   const [groupName, setGroupName] = useState('');
   const [groupDescription, setGroupDescription] = useState('');
@@ -85,6 +84,7 @@ export function NewChatDialog({
         throw new Error('User not authenticated');
       }
 
+      // 1. Создаём DM чат
       const response = await api.createDmChat({
         authorUsername: currentUser.username,
         receiverUsername: recipientAccount.username,
@@ -92,12 +92,17 @@ export function NewChatDialog({
       });
 
       console.log('✅ DM Chat created:', response);
+
+      // 2. Инициализируем шифрование (без пароля - используем расшифрованные ключи из контекста)
+      const encryptionInitialized = await initializeDmEncryption(response, true);
       
-      // Initialize encryption for the new DM chat
-      // Note: We need the user's password to decrypt our private keys
-      // For now, we'll skip encryption initialization here and do it on first message
-      // or when the chat is opened
-      
+      if (encryptionInitialized) {
+        console.log('✅ Encryption initialized for DM chat');
+      } else {
+        console.warn('⚠️ Failed to initialize encryption for DM chat');
+        // Продолжаем без шифрования или показываем предупреждение
+      }
+
       const displayName = `${recipientAccount.firstname} ${recipientAccount.lastname}`.trim() ||
         `@${recipientAccount.username}`;
       onChatCreated(response.chat.uuid, displayName);
@@ -111,7 +116,6 @@ export function NewChatDialog({
     }
   };
 
-
   const handleCreateGroup = async () => {
     if (!groupName.trim()) return;
 
@@ -122,9 +126,6 @@ export function NewChatDialog({
         name: groupName.trim(),
         description: groupDescription.trim() || undefined,
         adminId: currentUser!.uuid,
-        // Backend already uses adminId to create ChatMember for the admin,
-        // so we must not duplicate the same user in membersIds.
-        // Here we only send additional members (currently none).
         membersIds: [],
         public: isPublic,
       });
@@ -194,7 +195,7 @@ export function NewChatDialog({
                     <button
                       key={account.uuid}
                       onClick={() => handleCreateDm(account)}
-                      disabled={isCreating}
+                      disabled={isCreating || isEncrypting}
                       className="w-full p-3 rounded-lg flex items-center gap-3 hover:bg-accent transition-colors"
                     >
                       <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground">

@@ -154,6 +154,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Verify they were saved
         const verifyKeys = await keyStorage.getEncryptedKeys();
         console.log('Verified keys in storage:', verifyKeys ? 'found' : 'not found');
+        
+        // Dispatch event для инициализации расшифрованных ключей в EncryptionContext
+        window.dispatchEvent(new CustomEvent('encryption:login', { detail: { password } }));
       } catch (error) {
         console.error('Failed to decrypt/save encryption keys:', error);
         setHasEncryptionKeys(false);
@@ -162,7 +165,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('No encryption keys in response or no password');
       setHasEncryptionKeys(false);
     }
-
 
     if (response.status === 'PENDING_VERIFICATION') {
       setVerificationEmail(response.email);
@@ -250,6 +252,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      // Dispatch logout event перед очисткой
+      window.dispatchEvent(new CustomEvent('encryption:logout'));
+      
       setUser(null);
       setHasEncryptionKeys(false);
       localStorage.removeItem(OAUTH_USER_KEY);

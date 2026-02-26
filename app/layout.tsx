@@ -2,7 +2,9 @@ import type React from 'react';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import { AuthProvider } from '@/features/auth/providers/auth-context';
+import { EncryptionProvider } from '@/features/auth/providers/encryption-context';
 import { ProtectedRoute } from '@/features/auth/components/protected-route';
+
 
 import { ThemeProvider } from '@/shared/lib';
 import './globals.css';
@@ -42,9 +44,12 @@ export default function RootLayout({
       <body className={`font-sans antialiased`} suppressHydrationWarning={true}>
         <ThemeProvider>
           <AuthProvider>
-            <ProtectedRoute>{children}</ProtectedRoute>
+            <EncryptionProvider>
+              <ProtectedRoute>{children}</ProtectedRoute>
+            </EncryptionProvider>
           </AuthProvider>
         </ThemeProvider>
+
       </body>
 
     </html>
