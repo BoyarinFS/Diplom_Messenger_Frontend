@@ -61,11 +61,10 @@ export async function uploadFile(
       status: 'uploading',
     });
 
-    // Step 2: Upload file directly to MinIO using presigned URL
-    // Replace internal Docker host with localhost for browser access
-    const uploadUrl = replaceMinioHost(url);
+    // Step 2: Upload file directly to MinIO using presigned URL from backend
+    // Using the URL exactly as provided by the backend
+    await uploadToMinIO(url, file, (progress) => {
 
-    await uploadToMinIO(uploadUrl, file, (progress) => {
 
 
       onProgress?.({
@@ -176,26 +175,9 @@ async function uploadToMinIO(
 }
 
 /**
- * Replace internal MinIO host with localhost for browser access
- * Converts: http://minio-yopta:9000/... -> http://localhost:9002/...
- */
-function replaceMinioHost(url: string): string {
-  try {
-    const parsed = new URL(url);
-    // Replace any internal host with localhost:9002
-    if (parsed.hostname.includes('minio') || parsed.hostname === 'minio-yopta') {
-      parsed.hostname = 'localhost';
-      parsed.port = '9002';
-    }
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
-
-/**
  * Generate unique file ID for tracking
  */
+
 function generateFileId(): string {
   return `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
