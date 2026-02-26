@@ -1,23 +1,20 @@
 'use client';
 
 import type React from 'react';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '@/shared/api';
 import { webSocketService } from '@/shared/api';
 import type { Message, FileMetadata } from '@/shared/types';
 import { useAuth } from '@/features/auth';
-import { Send, MoreVertical, ArrowLeft, Reply, MessageSquare, Paperclip, X } from 'lucide-react';
+import { useChatEncryption } from '@/features/chat/hooks/use-chat-encryption';
+import { Send, MoreVertical, ArrowLeft, Reply, MessageSquare, Paperclip, X, Lock } from 'lucide-react';
 import { Button } from '@/shared/ui';
 import { Input } from '@/shared/ui';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/shared/ui';
 import { useToast } from '@/shared/ui';
 import { useFileUpload } from '@/features/file';
 import { FilePreview, CompactFilePreview } from '@/features/file';
-
 import { useWebSocketStatus } from '@/shared/lib/use-websocket-status';
-import { useCallback } from 'react';
-
-
 
 interface ChatWindowProps {
   chatId: string;
@@ -33,6 +30,17 @@ const PRESENCE_SEND_INTERVAL = 25000;
 export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindowProps) {
   const { user } = useAuth();
   const { isConnected, isStable } = useWebSocketStatus();
+  
+  // Шифрование
+  const { 
+    initializeDmEncryption, 
+    encryptMessage, 
+    decryptMessage, 
+    isChatEncrypted,
+    isInitialized: isEncryptionInitialized,
+    isLoading: isEncryptionLoading 
+  } = useChatEncryption();
+  
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -44,6 +52,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   const [peerLastTime, setPeerLastTime] = useState<string | null>(null);
   const [peerLastSeen, setPeerLastSeen] = useState<number | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<FileMetadata[]>([]);
+  const [isEncryptionReady, setIsEncryptionReady] = useState(false);
 
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -52,6 +61,9 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   const presenceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const peerCheckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isActiveRef = useRef(true);
+  const encryptionInitRef = useRef(false);
+
+  const { toast } = useToast();
 
   const { upload } = useFileUpload({
     chatId,
@@ -64,10 +76,39 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     },
   });
 
+  // Инициализация шифрования для DM чата
+  useEffect(() => {
+    if (!isDm || !chatId || encryptionInitRef.current) return;
+    
+    const initEncryption = async () => {
+      // Проверяем, не инициализировано ли уже шифрование для этого чата
+      if (isChatEncrypted(chatId)) {
+        setIsEncryptionReady(true);
+        return;
+      }
 
+      try {
+        // Получаем ключи собеседника
+        const dmKeys = await api.getDmKeys(chatId);
+        if (dmKeys && dmKeys.receiverKeys) {
+          // Инициализируем шифрование (мы получатель чата)
+          const success = await initializeDmEncryption(dmKeys, false);
+          setIsEncryptionReady(success);
+          if (success) {
+            console.log('✅ Encryption initialized for DM chat:', chatId);
+          } else {
+            console.warn('⚠️ Failed to initialize encryption for DM:', chatId);
+          }
+        }
+      } catch (error) {
+        console.error('❌ Failed to get DM keys:', error);
+        setIsEncryptionReady(false);
+      }
+    };
 
-
-  const { toast } = useToast();
+    initEncryption();
+    encryptionInitRef.current = true;
+  }, [isDm, chatId, initializeDmEncryption, isChatEncrypted]);
 
   // Функция для безопасного форматирования времени
   const formatMessageTime = useCallback((dateString?: string) => {
@@ -79,7 +120,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       return '';
     }
   }, []);
-
 
   const formatLastSeen = useCallback((timestamp: number) => {
     const now = Date.now();
@@ -99,46 +139,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     if (status === 'OFF') {
       const now = new Date();
       payload.last_time = now.toLocaleString('ru-RU', {
-        day: '2-digit', month: '2-digit', year: '2-digit',
-        hour: '2-digit', minute: '2-digit',
-      }).replace(',', '');
-    }
-    webSocketService.sendPresence(chatId, payload);
-  }, [chatId, isDm, user?.uuid]);
-
-  const handleNewMessage = useCallback((incoming: any) => {
-    if (isDm && incoming?.userId && incoming.userId !== user?.uuid) {
-      setPeerLastSeen(Date.now());
-    }
-
-    if (incoming?.type === 'PRESENCE' && 'status' in incoming) {
-      const { status, last_time, userId } = incoming;
-      if (!userId || userId === user?.uuid) return;
-      if (status === 'ONLINE') {
-        setPeerStatus('ONLINE');
-        setPeerLastTime(null);
-        setPeerLastSeen(Date.now());
-      } else if (status === 'OFF') {
-        setPeerStatus('OFF');
-        if (last_time) setPeerLastTime(last_time);
-      }
-      return;
-    }
-
-    const newMsg = incoming as Partial<Message> & { content?: string };
-    const normalized: Message = {
-      uuid: newMsg.uuid ?? `ws-${Date.now()}`,
-      text: newMsg.text || newMsg.content || '',
-      createdAt: newMsg.createdAt ?? new Date().toISOString(),
-      author: newMsg.author ?? user as any,
-      chatId: newMsg.chatId ?? chatId,
-      messageType: newMsg.messageType ?? 'regular',
-      parentMessageId: newMsg.parentMessageId,
-      threadRootMessageId: newMsg.threadRootMessageId,
-      threadMessagesCount: newMsg.threadMessagesCount,
-      updatedAt: newMsg.updatedAt,
-    };
-
     if (!normalized.text.trim()) return;
 
     setMessages((prev) => {

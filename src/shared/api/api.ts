@@ -347,6 +347,18 @@ class ApiClient {
     });
   }
 
+  async sendEncryptedMessage(chatId: string, encryptedContent: string, fileIds?: string[]): Promise<Message> {
+    return this.request(`/chats/${chatId}/messages/regular`, {
+      method: 'POST',
+      body: JSON.stringify({ 
+        text: encryptedContent,  // Зашифрованный текст (JSON строка)
+        fileIds,
+        isEncrypted: true,  // Флаг для бэкенда
+      }),
+    });
+  }
+
+
   async sendReply(chatId: string, data: CreateReplyRequest, fileIds?: string[]): Promise<Message> {
     return this.request(`/chats/${chatId}/messages/reply`, {
       method: 'POST',
