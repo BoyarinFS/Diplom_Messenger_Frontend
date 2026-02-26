@@ -12,7 +12,11 @@ import { Input } from '@/shared/ui';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/shared/ui';
 import { useToast } from '@/shared/ui';
 import { useFileUpload } from '@/features/file';
-import { FilePreview } from '@/features/file';
+import { FilePreview, CompactFilePreview } from '@/features/file';
+
+import { useWebSocketStatus } from '@/shared/lib/use-websocket-status';
+import { useCallback } from 'react';
+
 
 
 interface ChatWindowProps {
@@ -38,7 +42,9 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   const [threadMessages, setThreadMessages] = useState<Message[]>([]);
   const [peerStatus, setPeerStatus] = useState<'ONLINE' | 'OFF' | null>(null);
   const [peerLastTime, setPeerLastTime] = useState<string | null>(null);
+  const [peerLastSeen, setPeerLastSeen] = useState<number | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<FileMetadata[]>([]);
+
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -48,18 +54,23 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   const isActiveRef = useRef(true);
 
   const { upload } = useFileUpload({
+    chatId,
     onSuccess: (file) => {
       setAttachedFiles((prev) => [...prev, file]);
       toast({ title: 'Файл загружен', description: file.fileName });
     },
     onError: (error) => {
-      toast({ title: 'Ошибка загрузки', description: error.message, variant: 'destructive' });
+      toast({ title: 'Ошибка загрузки', description: error, variant: 'destructive' });
     },
   });
 
 
+
+
+  const { toast } = useToast();
+
   // Функция для безопасного форматирования времени
-  const formatMessageTime = (dateString?: string) => {
+  const formatMessageTime = useCallback((dateString?: string) => {
     if (!dateString) return '';
     try {
       const timePart = dateString.split('T')[1]?.split('.')[0];
@@ -68,6 +79,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       return '';
     }
   }, []);
+
 
   const formatLastSeen = useCallback((timestamp: number) => {
     const now = Date.now();
@@ -235,8 +247,9 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     setIsUploading(true);
     try {
       for (const file of Array.from(files)) {
-        await upload(file, chatId);
+        await upload(file);
       }
+
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) {
@@ -256,7 +269,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     const fileIds = attachedFiles.map((f) => f.uuid);
     
     // СОЗДАЕМ ОПТИМИСТИЧНОЕ СООБЩЕНИЕ
-    const optimisticMessage: Message = {
+    const optimisticMessage: Message & { attachments?: FileMetadata[] } = {
       uuid: `optimistic-${Date.now()}`,
       text: newMessage.trim(),
       author: user!,
@@ -269,6 +282,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
           : 'regular',
       attachments: attachedFiles,
     };
+
 
     try {
       setIsSending(true);
@@ -358,18 +372,21 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
             <p className="text-sm break-words">{message.text}</p>
 
             {/* Отображение вложенных файлов */}
-            {message.attachments && message.attachments.length > 0 && (
+            {(message as Message & { attachments?: FileMetadata[] }).attachments && 
+             (message as Message & { attachments?: FileMetadata[] }).attachments!.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
-                {message.attachments.map((file) => (
-                  <FilePreview
+                {(message as Message & { attachments?: FileMetadata[] }).attachments!.map((file) => (
+                  <CompactFilePreview
                     key={file.uuid}
                     file={file}
-                    compact
-                    onClick={() => window.open(file.url, '_blank')}
+                    className="cursor-pointer"
                   />
                 ))}
+
+
               </div>
             )}
+
 
 
             {timeLabel && (
@@ -487,7 +504,9 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
           <div className="flex flex-wrap gap-2 mb-2">
             {attachedFiles.map((file) => (
               <div key={file.uuid} className="relative">
-                <FilePreview file={file} compact />
+                <CompactFilePreview file={file} className="max-w-[150px]" />
+
+
                 <button
                   type="button"
                   onClick={() => removeAttachedFile(file.uuid)}

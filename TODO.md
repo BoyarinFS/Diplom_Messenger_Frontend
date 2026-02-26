@@ -1,18 +1,50 @@
-# API URL Fix
+# Оптимизация производительности - ЗАВЕРШЕНО
 
-## Changes Made
+## Что было сделано:
 
-- Updated API_BASE_URL in src/shared/api/api.ts from 'http://localhost:80/back-yoptagramm-service/api/v1' to 'http://localhost:8080/api/v1'
-- Updated API_BASE_URL in lib/api.ts from 'http://localhost:80/back-yoptagramm-service/api/v1' to 'http://localhost:8080/api/v1'
-- Fixed TypeScript errors in lib/api.ts:
-  - Changed headers type from HeadersInit to Record<string, string>
-  - Fixed sendReply method to use data.repliedMessageId instead of data.replyMessageId
+### 1. Включен Turbopack
+- `package.json`: `"dev": "next dev --turbopack"`
+- Ускоряет компиляцию в dev-режиме
 
-## Issue Resolved
+### 2. Оптимизирован next.config.mjs
+- `reactStrictMode: false` - отключен для скорости
+- `onDemandEntries` - агрессивное кэширование страниц
+- `optimizePackageImports` - оптимизация импортов lucide-react
+- Webpack оптимизации - отключены source maps, split chunks
 
-The "Request failed" error in chat-list.tsx was due to incorrect API_BASE_URL pointing to port 80 instead of 8080 where the backend runs.
+### 3. Оптимизирован proxy route
+- Упрощена логика обработки запросов
+- Убраны лишние операции
+- Добавлена поддержка Promise-based params для Next.js 15
 
-## Next Steps
+### 4. Оптимизирован API Client
+- Метод `request` сделан публичным
+- Добавлено кэширование GET-запросов (5 секунд)
+- Дедупликация параллельных запросов
 
-- Test the chat loading functionality to ensure it works.
-- If issues persist, check if backend is running on localhost:8080.
+### 5. Добавлен SWR для клиентского кэширования
+- `npm install swr`
+- Создан `SWRProvider` с оптимальной конфигурацией
+- Созданы хуки: `useAccount`, `useAccountChats`, `useChat`, `useChatMessages`, `useFile`, `useUserFiles`, `useEntityAttachments`
+
+## Результат:
+- Turbopack ускоряет перекомпиляцию
+- SWR кэширует данные на клиенте (dedupingInterval: 2-10 сек)
+- API Client кэширует GET-запросы на 5 секунд
+- Повторные запросы к тому же URL не дублируются
+
+## Рекомендации по использованию:
+
+```tsx
+// Вместо прямых API вызовов:
+const chats = await api.getAccountChats(userId);
+
+// Используйте SWR хуки:
+const { data: chats, error, isLoading } = useAccountChats(userId);
+```
+
+SWR автоматически:
+- Кэширует данные
+- Дедуплицирует запросы
+- Обновляет данные в фоне
+- Обрабатывает ошибки и retry
