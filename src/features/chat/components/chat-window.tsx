@@ -36,8 +36,10 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     initializeDmEncryption, 
     encryptMessage, 
     decryptMessage, 
-    isChatEncrypted
+    isChatEncrypted,
+    isPendingSession
   } = useChatEncryption();
+
   
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
@@ -51,6 +53,8 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   const [peerLastSeen, setPeerLastSeen] = useState<number | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<FileMetadata[]>([]);
   const [isEncryptionReady, setIsEncryptionReady] = useState(false);
+  const [isEncryptionPending, setIsEncryptionPending] = useState(false);
+
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -81,6 +85,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     const initEncryption = async () => {
       if (isChatEncrypted(chatId)) {
         setIsEncryptionReady(true);
+        setIsEncryptionPending(false);
         return;
       }
 
@@ -88,20 +93,29 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         const dmKeys = await api.getDmKeys(chatId);
         if (dmKeys && dmKeys.receiverKeys) {
           const success = await initializeDmEncryption(dmKeys, false);
-          setIsEncryptionReady(success);
           if (success) {
-            console.log('✅ Encryption initialized for DM chat:', chatId);
+            // Проверяем, активна ли сессия или в pending
+            const isActive = isChatEncrypted(chatId);
+            const isPending = isPendingSession(chatId);
+            setIsEncryptionReady(isActive);
+            setIsEncryptionPending(isPending);
+            console.log('✅ Encryption initialized for DM chat:', chatId, { isActive, isPending });
+          } else {
+            setIsEncryptionReady(false);
+            setIsEncryptionPending(false);
           }
         }
       } catch (error) {
         console.error('❌ Failed to get DM keys:', error);
         setIsEncryptionReady(false);
+        setIsEncryptionPending(false);
       }
     };
 
     initEncryption();
     encryptionInitRef.current = true;
-  }, [isDm, chatId, initializeDmEncryption, isChatEncrypted]);
+  }, [isDm, chatId, initializeDmEncryption, isChatEncrypted, isPendingSession]);
+
 
   const formatMessageTime = useCallback((dateString?: string) => {
     if (!dateString) return '';
@@ -166,11 +180,18 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       const decrypted = decryptMessage(chatId, decryptedText);
       if (decrypted) {
         decryptedText = decrypted;
+        // Если была pending сессия, теперь она активна
+        if (isEncryptionPending && isChatEncrypted(chatId)) {
+          setIsEncryptionReady(true);
+          setIsEncryptionPending(false);
+          console.log('🔓 Bob: Session now active, can send encrypted messages');
+        }
       } else {
         console.warn('⚠️ Failed to decrypt message:', newMsg.uuid);
         decryptedText = '[Зашифрованное сообщение]';
       }
     }
+
     
     const normalized: Message = {
       uuid: newMsg.uuid ?? `ws-${Date.now()}`,
@@ -201,7 +222,8 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       if (prev.some((msg) => msg.uuid === normalized.uuid)) return prev;
       return [...prev, normalized];
     });
-  }, [chatId, isDm, user, decryptMessage]);
+  }, [chatId, isDm, user, decryptMessage, isEncryptionPending, isChatEncrypted]);
+
 
   const loadMessages = useCallback(async () => {
     try {
@@ -224,7 +246,8 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     } finally {
       setIsLoading(false);
     }
-  }, [chatId, decryptMessage]);
+  }, [chatId, decryptMessage, isEncryptionPending, isChatEncrypted]);
+
 
   const loadThreadMessages = useCallback(async (threadRootId: string) => {
     try {
@@ -287,7 +310,8 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       webSocketService.unsubscribeFromChat(chatId);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [chatId, isDm, user?.uuid, handleNewMessage, loadMessages, sendPresenceStatus, peerLastSeen, peerStatus]);
+  }, [chatId, isDm, user?.uuid, handleNewMessage, loadMessages, sendPresenceStatus, peerLastSeen, peerStatus, isEncryptionPending, isChatEncrypted]);
+
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
@@ -338,7 +362,17 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       } else {
         console.warn('⚠️ Failed to encrypt message, sending plaintext');
       }
+    } else if (isDm && isEncryptionPending) {
+      // Bob не может отправлять зашифрованные сообщения до получения первого сообщения
+      console.log('⏳ Bob: Cannot encrypt yet, waiting for first message from Alice');
+      // Отправляем plaintext с флагом что ждём шифрование
+      toast({ 
+        title: 'Ожидание шифрования', 
+        description: 'Отправка открытым текстом до получения первого сообщения',
+        variant: 'default'
+      });
     }
+
     
     const optimisticMessage: Message & { attachments?: FileMetadata[]; isEncrypted?: boolean } = {
       uuid: `optimistic-${Date.now()}`,
@@ -538,11 +572,17 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
               <h2 className="font-semibold text-foreground">{chatName}</h2>
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 {renderPeerStatus()}
-                {isDm && isEncryptionReady && (
-                  <span className="flex items-center gap-1 text-green-500">
-                    <Lock className="h-3 w-3" /> E2E
-                  </span>
-                )}
+            {isDm && isEncryptionReady && (
+              <span className="flex items-center gap-1 text-green-500">
+                <Lock className="h-3 w-3" /> E2E
+              </span>
+            )}
+            {isDm && isEncryptionPending && (
+              <span className="flex items-center gap-1 text-yellow-500">
+                <Lock className="h-3 w-3" /> Ожидание...
+              </span>
+            )}
+
               </p>
             </div>
             <Button size="icon" variant="ghost"><MoreVertical className="h-5 w-5" /></Button>
@@ -623,19 +663,21 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
             <Paperclip className="h-5 w-5" />
           </Button>
           <Input
-            placeholder={activeThread ? 'Reply to thread...' : (isDm && isEncryptionReady ? 'Send encrypted message...' : 'Type a message...')}
+            placeholder={activeThread ? 'Reply to thread...' : (isDm && isEncryptionReady ? 'Send encrypted message...' : isDm && isEncryptionPending ? 'Send message (encryption pending)...' : 'Type a message...')}
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             disabled={isSending || !isConnected}
             className="flex-1"
           />
+
           <Button
             type="submit"
             size="icon"
             disabled={(!newMessage.trim() && attachedFiles.length === 0) || isSending || isUploading}
           >
-            {isDm && isEncryptionReady ? <Lock className="h-4 w-4" /> : <Send className="h-5 w-5" />}
+            {isDm && isEncryptionReady ? <Lock className="h-4 w-4" /> : isDm && isEncryptionPending ? <Lock className="h-4 w-4 text-yellow-500" /> : <Send className="h-5 w-5" />}
           </Button>
+
         </form>
       </div>
     </div>
