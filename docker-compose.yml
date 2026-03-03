@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: yoptagramm-frontend
     ports:
-      - "3001:3000"
+      - "3000:3000"
     environment:
       # URL бэкенда для серверных API routes
       # yopta-nginx - имя nginx контейнера бэкенда (порт 80)
