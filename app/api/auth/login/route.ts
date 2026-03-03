@@ -7,8 +7,8 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // Проксируем запрос на бэкенд
     const response = await fetch(`${API_BASE_URL}/auth/login`, {
+
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -23,22 +23,25 @@ export async function POST(request: NextRequest) {
 
     const data = await response.json();
 
-    // Устанавливаем HttpOnly куку с токеном
     const res = NextResponse.json({ 
       token: data.token,
       email: data.email, 
       account: data.account, 
-      status: data.status 
+      status: data.status,
+      accountKeysResponse: data.accountKeysResponse
     });
+
 
 
     res.cookies.set('auth_token', data.token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7, // 7 дней
+      sameSite: 'strict',
+      maxAge: 60 * 60 * 24 * 7,
+
       path: '/',
     });
+
 
     return res;
   } catch (error) {

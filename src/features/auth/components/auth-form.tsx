@@ -109,14 +109,13 @@ export function AuthForm() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setError('');
 
     if (!passwordStrength.isValid) {
       setError('Пароль должен содержать минимум 8 символов и хотя бы одну цифру.');
       return;
     }
-
-
 
     if (!passwordsMatch) {
       setError('Пароли не совпадают');
@@ -129,11 +128,13 @@ export function AuthForm() {
       const { confirmPassword, ...registerPayload } = registerData;
       await register(registerPayload);
     } catch (err: any) {
-      setError(err.message || 'Registration failed');
+      console.error('Registration error:', err);
+      setError(err?.message || 'Ошибка при регистрации. Попробуйте снова.');
     } finally {
       setIsLoading(false);
     }
   };
+
 
 
   return (
