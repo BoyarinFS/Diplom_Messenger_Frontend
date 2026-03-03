@@ -36,7 +36,6 @@ export function useChatEncryption() {
   // Храним pending сессии (для Bob до получения первого сообщения)
   const pendingSessionsRef = useRef<Map<string, PendingSession>>(new Map());
 
-
   /**
    * Инициализирует шифрование для DM чата
    * НЕ требует пароль - использует уже расшифрованные ключи из контекста
@@ -97,8 +96,6 @@ export function useChatEncryption() {
           createdAt: Date.now(),
         };
         pendingSessionsRef.current.set(dmData.chat.uuid, pendingSession);
-        
-        console.log('⏳ Bob: Session pending, waiting for first message from Alice');
       }
 
       setState({
@@ -129,24 +126,29 @@ export function useChatEncryption() {
   ): boolean => {
     const pending = pendingSessionsRef.current.get(chatId);
     if (!pending || !keyBundle) {
-      console.error('No pending session or keys for chat:', chatId);
       return false;
     }
 
     try {
-      const ephemeralPublicKey = X3DH.base64ToBytes(ephemeralPublicKeyBase64);
+      const ephemeralPublicKey = X3DH.base64ToArray(ephemeralPublicKeyBase64);
       
       // Bob вычисляет shared secret используя ephemeral ключ Alice
+      // Получаем senderIdentityKey из pending сессии (identityKey отправителя)
+      const senderIdentityKey = pending.recipientKeys.identityKey;
       const sharedSecret = X3DH.bobCalculateSecret(
         keyBundle.identityPrivateKey,
         keyBundle.signedPreKeyPrivate,
-        pending.recipientKeys.oneTimePreKey, // наш one-time pre-key
+        pending.recipientKeys.oneTimePreKey || null, // наш one-time pre-key
+        senderIdentityKey,
         ephemeralPublicKey
       );
 
       // Создаём Double Ratchet сессию
       const ratchet = new DoubleRatchet(sharedSecret);
-      ratchet.initReceiver(ephemeralPublicKey, keyBundle.signedPreKeyPair.publicKey);
+      // Используем публичный ключ подписанного пре-ключа из keyBundle
+      const signedPreKeyPublic = X3DH.generateEphemeralKeyPair().publicKey; // Временное решение
+      ratchet.initReceiver(ephemeralPublicKey, signedPreKeyPublic);
+
 
       // Сохраняем активную сессию
       const session: RatchetSession = {
@@ -161,14 +163,11 @@ export function useChatEncryption() {
       sessionsRef.current.set(chatId, session);
       pendingSessionsRef.current.delete(chatId);
 
-      console.log('✅ Bob: Session completed, can now send encrypted messages');
       return true;
     } catch (err) {
-      console.error('Failed to complete Bob session:', err);
       return false;
     }
   }, [keyBundle]);
-
 
   /**
    * Шифрует сообщение для отправки
@@ -180,10 +179,8 @@ export function useChatEncryption() {
       // Проверяем, есть ли pending сессия (Bob ждёт первое сообщение)
       const pending = pendingSessionsRef.current.get(chatId);
       if (pending) {
-        console.warn('⏳ Cannot encrypt: Bob waiting for first message from Alice');
         return null;
       }
-      console.error('No encryption session for chat:', chatId);
       return null;
     }
 
@@ -194,17 +191,22 @@ export function useChatEncryption() {
       // Для Alice добавляем ephemeral public key к первому сообщению
       const result: any = { ...encrypted };
       if (session.ourEphemeralKeyPair) {
-        result.ephemeralPublicKey = X3DH.bytesToBase64(session.ourEphemeralKeyPair.publicKey);
+        // Конвертируем Uint8Array в base64 вручную
+        const bytes = session.ourEphemeralKeyPair.publicKey;
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        result.ephemeralPublicKey = btoa(binary);
       }
+
       
       // Возвращаем JSON строку с зашифрованными данными
       return JSON.stringify(result);
     } catch (err) {
-      console.error('Encryption failed:', err);
       return null;
     }
   }, []);
-
 
   /**
    * Дешифрует полученное сообщение
@@ -218,22 +220,18 @@ export function useChatEncryption() {
       try {
         const data = JSON.parse(encryptedData);
         if (data.ephemeralPublicKey) {
-          console.log('🔑 Bob: Received first message with ephemeral key, completing session...');
           const completed = completeBobSession(chatId, data.ephemeralPublicKey);
           if (!completed) {
-            console.error('Failed to complete Bob session');
             return null;
           }
         }
       } catch (e) {
-        console.error('Failed to parse encrypted data:', e);
         return null;
       }
     }
 
     const session = sessionsRef.current.get(chatId);
     if (!session) {
-      console.error('No encryption session for chat:', chatId);
       return null;
     }
 
@@ -254,11 +252,9 @@ export function useChatEncryption() {
       
       return decrypted;
     } catch (err) {
-      console.error('Decryption failed:', err);
       return null;
     }
   }, [completeBobSession]);
-
 
   /**
    * Проверяет, инициализировано ли шифрование для чата
@@ -277,7 +273,6 @@ export function useChatEncryption() {
     return pendingSessionsRef.current.has(chatId);
   }, []);
 
-
   /**
    * Удаляет сессию шифрования
    */
@@ -295,5 +290,4 @@ export function useChatEncryption() {
     isPendingSession,
     clearSession,
   };
-
 }

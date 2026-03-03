@@ -1,22 +1,73 @@
 'use client';
 
 import type React from 'react';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
+
 import { api } from '@/shared/api';
 import { webSocketService } from '@/shared/api';
 import type { Message, FileMetadata } from '@/shared/types';
 import { useAuth } from '@/features/auth';
 import { useChatEncryption } from '@/features/chat/hooks/use-chat-encryption';
-import { Send, MoreVertical, ArrowLeft, Reply, MessageSquare, Paperclip, X, Lock } from 'lucide-react';
+import { Send, MoreVertical, ArrowLeft, Reply, MessageSquare, Paperclip, X, Lock, File, Image, FileText, Music, Video } from 'lucide-react';
+
 import { Button } from '@/shared/ui';
 import { Input } from '@/shared/ui';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/shared/ui';
 import { useToast } from '@/shared/ui';
 import { useFileUpload } from '@/features/file';
 import { CompactFilePreview } from '@/features/file';
+import { FileImage } from '@/features/file';
+
 import { useWebSocketStatus } from '@/shared/lib/use-websocket-status';
 
+// Мемоизированный компонент для отображения прикрепленных файлов
+const AttachedFilesList = memo(({ 
+  files, 
+  onRemove 
+}: { 
+  files: FileMetadata[]; 
+  onRemove: (fileId: string) => void;
+}) => {
+  if (files.length === 0) return null;
+  
+  return (
+    <div className="mb-2 space-y-2">
+      {files.map((file) => {
+        const isImage = file.mimeType?.startsWith('image/');
+        
+        return (
+          <div key={file.uuid} className="flex items-center gap-2 px-3 py-2 bg-accent rounded-lg">
+            {isImage ? (
+              <FileImage
+                fileId={file.uuid}
+                fileName={file.fileName}
+                thumbnailUrl={file.thumbnailUrl}
+                className="w-10 h-10 rounded"
+              />
+            ) : (
+              <File className="h-4 w-4 text-muted-foreground" />
+            )}
+            <span className="text-sm text-muted-foreground truncate flex-1">
+              {file.fileName}
+            </span>
+            <button
+              type="button"
+              onClick={() => onRemove(file.uuid)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+AttachedFilesList.displayName = 'AttachedFilesList';
+
 interface ChatWindowProps {
+
   chatId: string;
   chatName: string;
   isDm?: boolean;
@@ -31,7 +82,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   const { user } = useAuth();
   const { isConnected, isStable } = useWebSocketStatus();
   
-  // Шифрование
   const { 
     initializeDmEncryption, 
     encryptMessage, 
@@ -40,7 +90,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     isPendingSession
   } = useChatEncryption();
 
-  
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -58,27 +107,37 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const isScrolledToBottomRef = useRef(true);
 
   const presenceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const peerCheckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isActiveRef = useRef(true);
   const encryptionInitRef = useRef(false);
+  const initialScrollDoneRef = useRef(false);
 
   const { toast } = useToast();
 
+  // Используем ref для стабильных колбэков без пересоздания при изменении текста
+  const attachedFilesRef = useRef(attachedFiles);
+  attachedFilesRef.current = attachedFiles;
+
+  const onUploadSuccess = useCallback((file: FileMetadata) => {
+    setAttachedFiles([...attachedFilesRef.current, file]);
+    toast({ title: 'Файл загружен', description: file.fileName });
+  }, [toast]);
+
+  const onUploadError = useCallback((error: string) => {
+    toast({ title: 'Ошибка загрузки', description: error, variant: 'destructive' });
+  }, [toast]);
+
   const { upload } = useFileUpload({
     chatId,
-    onSuccess: (file) => {
-      setAttachedFiles((prev) => [...prev, file]);
-      toast({ title: 'Файл загружен', description: file.fileName });
-    },
-    onError: (error) => {
-      toast({ title: 'Ошибка загрузки', description: error, variant: 'destructive' });
-    },
+    onSuccess: onUploadSuccess,
+    onError: onUploadError,
   });
 
-  // Инициализация шифрования для DM чата
+
   useEffect(() => {
     if (!isDm || !chatId || encryptionInitRef.current) return;
     
@@ -94,19 +153,16 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         if (dmKeys && dmKeys.receiverKeys) {
           const success = await initializeDmEncryption(dmKeys, false);
           if (success) {
-            // Проверяем, активна ли сессия или в pending
             const isActive = isChatEncrypted(chatId);
             const isPending = isPendingSession(chatId);
             setIsEncryptionReady(isActive);
             setIsEncryptionPending(isPending);
-            console.log('✅ Encryption initialized for DM chat:', chatId, { isActive, isPending });
           } else {
             setIsEncryptionReady(false);
             setIsEncryptionPending(false);
           }
         }
       } catch (error) {
-        console.error('❌ Failed to get DM keys:', error);
         setIsEncryptionReady(false);
         setIsEncryptionPending(false);
       }
@@ -115,7 +171,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     initEncryption();
     encryptionInitRef.current = true;
   }, [isDm, chatId, initializeDmEncryption, isChatEncrypted, isPendingSession]);
-
 
   const formatMessageTime = useCallback((dateString?: string) => {
     if (!dateString) return '';
@@ -152,7 +207,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     webSocketService.sendPresence(chatId, payload);
   }, [chatId, isDm, user?.uuid]);
 
-  // Обработка входящих сообщений с дешифрованием
   const handleNewMessage = useCallback((incoming: any) => {
     if (isDm && incoming?.userId && incoming.userId !== user?.uuid) {
       setPeerLastSeen(Date.now());
@@ -172,28 +226,23 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       return;
     }
 
-    const newMsg = incoming as Partial<Message> & { content?: string; isEncrypted?: boolean };
+    const newMsg = incoming as Partial<Message> & { content?: string; isEncrypted?: boolean; attachments?: FileMetadata[] };
     
-    // Дешифруем сообщение если оно зашифровано
     let decryptedText = newMsg.text || newMsg.content || '';
     if (newMsg.isEncrypted && decryptedText) {
       const decrypted = decryptMessage(chatId, decryptedText);
       if (decrypted) {
         decryptedText = decrypted;
-        // Если была pending сессия, теперь она активна
         if (isEncryptionPending && isChatEncrypted(chatId)) {
           setIsEncryptionReady(true);
           setIsEncryptionPending(false);
-          console.log('🔓 Bob: Session now active, can send encrypted messages');
         }
       } else {
-        console.warn('⚠️ Failed to decrypt message:', newMsg.uuid);
         decryptedText = '[Зашифрованное сообщение]';
       }
     }
 
-    
-    const normalized: Message = {
+    const normalized: Message & { attachments?: FileMetadata[] } = {
       uuid: newMsg.uuid ?? `ws-${Date.now()}`,
       text: decryptedText,
       createdAt: newMsg.createdAt ?? new Date().toISOString(),
@@ -204,9 +253,11 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       threadRootMessageId: newMsg.threadRootMessageId,
       threadMessagesCount: newMsg.threadMessagesCount,
       updatedAt: newMsg.updatedAt,
+      attachments: newMsg.attachments,
     };
 
-    if (!normalized.text.trim()) return;
+    // Skip empty messages without attachments
+    if (!normalized.text.trim() && (!normalized.attachments || normalized.attachments.length === 0)) return;
 
     setMessages((prev) => {
       const optimisticIndex = prev.findIndex(
@@ -224,14 +275,12 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     });
   }, [chatId, isDm, user, decryptMessage, isEncryptionPending, isChatEncrypted]);
 
-
   const loadMessages = useCallback(async () => {
     try {
       setIsLoading(true);
       const response = await api.getChatMessages(chatId);
       const msgs = Array.isArray(response) ? response : response.messages || [];
       
-      // Дешифруем загруженные сообщения если нужно
       const decryptedMsgs = msgs.map((msg: any) => {
         if (msg.isEncrypted && msg.text) {
           const decrypted = decryptMessage(chatId, msg.text);
@@ -241,13 +290,13 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       });
       
       setMessages(decryptedMsgs);
-    } catch {
+    } catch (err) {
+      console.error('Failed to load messages:', err);
       setMessages([]);
     } finally {
       setIsLoading(false);
     }
   }, [chatId, decryptMessage, isEncryptionPending, isChatEncrypted]);
-
 
   const loadThreadMessages = useCallback(async (threadRootId: string) => {
     try {
@@ -259,12 +308,27 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     }
   }, [chatId]);
 
+  // Проверяем, находится ли скролл внизу
+  const checkIfScrolledToBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return true;
+    
+    const threshold = 50;
+    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+  }, []);
+
+  // Обработчик скролла
+  const handleScroll = useCallback(() => {
+    isScrolledToBottomRef.current = checkIfScrolledToBottom();
+  }, [checkIfScrolledToBottom]);
+
   useEffect(() => {
     isActiveRef.current = true;
     loadMessages();
     setReplyTo(null);
     setActiveThread(null);
     encryptionInitRef.current = false;
+    initialScrollDoneRef.current = false;
 
     webSocketService.connect(
       () => {
@@ -312,10 +376,28 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     };
   }, [chatId, isDm, user?.uuid, handleNewMessage, loadMessages, sendPresenceStatus, peerLastSeen, peerStatus, isEncryptionPending, isChatEncrypted]);
 
-
+  // Первоначальный скролл вниз при загрузке
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-  }, [messages.length, threadMessages.length]);
+    if (!isLoading && !initialScrollDoneRef.current && messages.length > 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+      initialScrollDoneRef.current = true;
+    }
+  }, [isLoading, messages.length]);
+
+  // Скролл вниз только при отправке нового сообщения (от текущего пользователя)
+  useEffect(() => {
+    if (messages.length === 0) return;
+    
+    const lastMessage = messages[messages.length - 1];
+    const isOwnMessage = lastMessage.author?.uuid === user?.uuid;
+    
+    // Скроллим вниз только если:
+    // 1. Это наше сообщение (мы только что отправили)
+    // 2. Пользователь уже был внизу (смотрел последние сообщения)
+    if (isOwnMessage && isScrolledToBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [messages, user?.uuid]);
 
   useEffect(() => {
     if (activeThread) loadThreadMessages(activeThread.uuid);
@@ -342,7 +424,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     setAttachedFiles((prev) => prev.filter((f) => f.uuid !== fileId));
   };
 
-  // Отправка сообщения с шифрованием
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if ((!newMessage.trim() && attachedFiles.length === 0) || isSending) return;
@@ -350,7 +431,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     const fileIds = attachedFiles.map((f) => f.uuid);
     const messageText = newMessage.trim();
     
-    // Шифруем сообщение если это DM и шифрование готово
     let contentToSend = messageText;
     let isEncrypted = false;
     
@@ -359,13 +439,8 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       if (encrypted) {
         contentToSend = encrypted;
         isEncrypted = true;
-      } else {
-        console.warn('⚠️ Failed to encrypt message, sending plaintext');
       }
     } else if (isDm && isEncryptionPending) {
-      // Bob не может отправлять зашифрованные сообщения до получения первого сообщения
-      console.log('⏳ Bob: Cannot encrypt yet, waiting for first message from Alice');
-      // Отправляем plaintext с флагом что ждём шифрование
       toast({ 
         title: 'Ожидание шифрования', 
         description: 'Отправка открытым текстом до получения первого сообщения',
@@ -373,7 +448,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       });
     }
 
-    
     const optimisticMessage: Message & { attachments?: FileMetadata[]; isEncrypted?: boolean } = {
       uuid: `optimistic-${Date.now()}`,
       text: messageText,
@@ -440,7 +514,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         });
       }
     } catch (error) {
-      console.error('❌ Failed to send message:', error);
       toast({ 
         title: 'Ошибка', 
         description: 'Не удалось отправить сообщение', 
@@ -468,45 +541,84 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     const isReply = message.messageType === 'reply';
     const timeLabel = formatMessageTime(message.createdAt);
     const msgIsEncrypted = (message as any).isEncrypted;
+    
+    // Проверяем наличие вложений
+    const msgWithAttachments = message as Message & { attachments?: FileMetadata[]; fileIds?: string[]; files?: FileMetadata[] };
+    const attachments = msgWithAttachments.attachments || msgWithAttachments.files || [];
+    const hasAttachments = attachments.length > 0;
+    const hasText = message.text?.trim().length > 0;
+    const hasOnlyImages = hasAttachments && attachments.every(f => f.mimeType?.startsWith('image/')) && !hasText;
 
     return (
       <div className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'} mb-4`}>
         <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'} max-w-[80%]`}>
-          <div className={`rounded-2xl px-4 py-2 ${
+          {/* Если только изображения без текста - убираем фон и padding */}
+          <div className={hasOnlyImages ? '' : `rounded-2xl px-4 py-2 ${
             isOwn ? 'bg-primary text-primary-foreground rounded-br-sm' : 'bg-muted text-foreground rounded-bl-sm'
           }`}>
-            {!isOwn && message.author && (
+            {!isOwn && message.author && !hasOnlyImages && (
               <p className="text-xs font-semibold mb-1 opacity-70">
                 {message.author.firstname} {message.author.lastname}
               </p>
             )}
-            {isReply && message.parentMessageId && (
+            {isReply && message.parentMessageId && !hasOnlyImages && (
               <div className="mb-2 p-2 rounded bg-black/10 text-xs border-l-2 border-primary-foreground/50">
                 <p className="opacity-70">Replying to message...</p>
               </div>
             )}
-            <div className="flex items-center gap-2">
-              <p className="text-sm break-words">{message.text}</p>
-              {msgIsEncrypted && <Lock className="h-3 w-3 opacity-50" />}
-            </div>
-
-            {(message as Message & { attachments?: FileMetadata[] }).attachments && 
-             (message as Message & { attachments?: FileMetadata[] }).attachments!.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {(message as Message & { attachments?: FileMetadata[] }).attachments!.map((file) => (
-                  <CompactFilePreview
-                    key={file.uuid}
-                    file={file}
-                    className="cursor-pointer"
-                  />
-                ))}
+            
+            {/* Текст сообщения */}
+            {hasText && (
+              <div className="flex items-center gap-2">
+                <p className="text-sm break-words">{message.text}</p>
+                {msgIsEncrypted && <Lock className="h-3 w-3 opacity-50" />}
               </div>
             )}
 
-            {timeLabel && (
+            {/* File Attachments Display */}
+            {hasAttachments && (
+              <div className={`${hasText ? 'mt-2 pt-2 border-t border-black/10' : ''} space-y-2`}>
+                {attachments.map((file, idx) => {
+                  const isImage = file.mimeType?.startsWith('image/');
+                  const isVideo = file.mimeType?.startsWith('video/');
+                  const isAudio = file.mimeType?.startsWith('audio/');
+                  
+                  return (
+                    <div key={file.uuid || idx} className="flex flex-col gap-1">
+                      {isImage ? (
+                        <div className="relative">
+                          <FileImage
+                            fileId={file.uuid}
+                            fileName={file.fileName}
+                            thumbnailUrl={file.thumbnailUrl}
+                            className={`max-w-[200px] max-h-[150px] ${hasOnlyImages ? 'rounded-lg' : 'rounded-lg'}`}
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 px-2 py-1.5 bg-black/10 rounded-lg">
+                          {isVideo ? (
+                            <Video className="h-4 w-4" />
+                          ) : isAudio ? (
+                            <Music className="h-4 w-4" />
+                          ) : (
+                            <FileText className="h-4 w-4" />
+                          )}
+                          <span className="text-xs truncate max-w-[150px]">{file.fileName}</span>
+                          <span className="text-xs opacity-50">({(file.fileSize / 1024).toFixed(1)} KB)</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Время - показываем только если есть текст или не только изображения */}
+            {(hasText || !hasOnlyImages) && timeLabel && (
               <p className={`text-xs mt-1 ${isOwn ? 'opacity-70' : 'opacity-50'}`}>{timeLabel}</p>
             )}
           </div>
+          
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -590,7 +702,11 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto custom-scroll">
+      <div 
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 min-h-0 overflow-y-auto custom-scroll"
+      >
         <div className="p-4">
           {isLoading ? (
             <div className="text-center text-muted-foreground py-8">Loading messages...</div>
@@ -604,7 +720,11 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
                 </div>
               )}
               {(activeThread ? threadMessages : messages)
-                .filter((msg) => msg && (typeof msg.text === 'string' ? msg.text.trim().length > 0 : !!msg.author))
+                .filter((msg) => msg && (
+                  (typeof msg.text === 'string' && msg.text.trim().length > 0) || 
+                  !!msg.author ||
+                  ((msg as any).attachments?.length > 0)
+                ))
                 .map((msg, idx) => (
                   <div key={msg.uuid ?? `msg-${idx}`} className="group">
                     <MessageItem message={msg} isThreadView={!!activeThread} />
@@ -622,28 +742,32 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
             <div className="text-sm">
               {replyTo.author?.firstname && <span className="font-semibold text-primary">Replying to {replyTo.author.firstname}</span>}
               <p className="text-muted-foreground truncate max-w-[200px]">{replyTo.text}</p>
+              {(() => {
+                const replyWithAttachments = replyTo as Message & { attachments?: FileMetadata[]; files?: FileMetadata[] };
+                const attachments = replyWithAttachments.attachments || replyWithAttachments.files || [];
+                
+                if (attachments.length === 0) return null;
+                
+                const hasImage = attachments.some(a => a.mimeType?.startsWith('image/'));
+                
+                return (
+                  <div className="mt-2 flex items-center gap-2">
+                    <Paperclip className="h-3 w-3" />
+                    <span className="text-xs text-muted-foreground">
+                      {attachments.length} файл{attachments.length > 1 ? 'а' : ''}
+                      {hasImage && ' (фото)'}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
             <Button variant="ghost" size="icon" onClick={() => setReplyTo(null)} className="h-6 w-6">×</Button>
           </div>
         )}
-        
-        {attachedFiles.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
-            {attachedFiles.map((file) => (
-              <div key={file.uuid} className="relative">
-                <CompactFilePreview file={file} className="max-w-[150px]" />
-                <button
-                  type="button"
-                  onClick={() => removeAttachedFile(file.uuid)}
-                  className="absolute -top-1 -right-1 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center text-xs"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        
+
+        <AttachedFilesList files={attachedFiles} onRemove={removeAttachedFile} />
+
+
         <form onSubmit={handleSendMessage} className="flex gap-2">
           <input
             type="file"

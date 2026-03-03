@@ -25,16 +25,12 @@ export interface UploadResult {
   error?: string;
 }
 
-/**
- * Upload file directly to MinIO using presigned URL
- */
 export async function uploadFile(
   file: File,
   options: UploadOptions = {},
 ): Promise<UploadResult> {
   const { chatId, attachableType, attachableId, onProgress } = options;
 
-  // Validate file
   const validation = validateFile(file);
   if (!validation.valid) {
     return { success: false, error: validation.error };
@@ -43,18 +39,15 @@ export async function uploadFile(
   const fileId = generateFileId();
 
   try {
-    // Step 1: Get presigned URL from backend
     const uploadUrlRequest: UploadUrlRequest = {
       fileName: file.name,
-      mimeType: file.type,
+      contentType: file.type,
       fileSize: file.size,
-      chatId,
+      chatId: chatId || null,
     };
 
+    const { url, objectKey } = await api.getUploadUrl(uploadUrlRequest);
 
-    const { url, objectKey, publicUrl } = await api.getUploadUrl(uploadUrlRequest);
-
-    // Report progress - starting upload
     onProgress?.({
       fileId,
       fileName: file.name,
@@ -62,12 +55,7 @@ export async function uploadFile(
       status: 'uploading',
     });
 
-    // Step 2: Upload file directly to MinIO using presigned URL from backend
-    // Using the URL exactly as provided by the backend
     await uploadToMinIO(url, file, (progress) => {
-
-
-
       onProgress?.({
         fileId,
         fileName: file.name,
@@ -76,7 +64,6 @@ export async function uploadFile(
       });
     });
 
-    // Report progress - processing
     onProgress?.({
       fileId,
       fileName: file.name,
@@ -84,7 +71,6 @@ export async function uploadFile(
       status: 'processing',
     });
 
-    // Step 3: Get image dimensions if it's an image
     let width: number | undefined;
     let height: number | undefined;
     
@@ -96,7 +82,6 @@ export async function uploadFile(
       }
     }
 
-    // Step 4: Confirm upload with backend
     const confirmRequest: ConfirmUploadRequest = {
       objectKey,
       fileName: file.name,
@@ -110,7 +95,6 @@ export async function uploadFile(
 
     const fileMetadata = await api.confirmUpload(confirmRequest);
 
-    // Report progress - completed
     onProgress?.({
       fileId,
       fileName: file.name,
@@ -134,59 +118,39 @@ export async function uploadFile(
   }
 }
 
-/**
- * Upload file to MinIO using presigned URL with progress tracking
- */
 async function uploadToMinIO(
   presignedUrl: string,
   file: File,
   onProgress: (progress: number) => void,
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-
-    // Track upload progress
-    xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) {
-        const progress = Math.round((event.loaded / event.total) * 100);
-        onProgress(progress);
-      }
-    });
-
-    xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        reject(new Error(`Upload failed with status ${xhr.status}`));
-      }
-    });
-
-    xhr.addEventListener('error', () => {
-      reject(new Error('Network error during upload'));
-    });
-
-    xhr.addEventListener('abort', () => {
-      reject(new Error('Upload aborted'));
-    });
-
-    xhr.open('PUT', presignedUrl, true);
-    xhr.setRequestHeader('Content-Type', file.type);
-    xhr.send(file);
+  const arrayBuffer = await file.arrayBuffer();
+  onProgress(0);
+  
+  const originalUrl = new URL(presignedUrl);
+  const modifiedUrl = `http://localhost:80/minio${originalUrl.pathname}${originalUrl.search}`;
+  
+  const response = await fetch(modifiedUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': file.type || 'application/octet-stream',
+    },
+    body: arrayBuffer,
+    mode: 'cors',
+    credentials: 'omit',
+    referrerPolicy: 'no-referrer',
   });
+  
+  onProgress(100);
+  
+  if (!response.ok) {
+    throw new Error(`Upload failed with status ${response.status}`);
+  }
 }
-
-/**
- * Generate unique file ID for tracking
- */
 
 function generateFileId(): string {
   return `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
-
-/**
- * Upload multiple files
- */
 export async function uploadMultipleFiles(
   files: File[],
   options: UploadOptions = {},
@@ -201,14 +165,10 @@ export async function uploadMultipleFiles(
   return results;
 }
 
-/**
- * Download file using presigned URL
- */
 export async function downloadFile(fileId: string, fileName?: string): Promise<void> {
   try {
     const { url } = await api.getDownloadUrl(fileId);
 
-    // Create temporary link and trigger download
     const link = document.createElement('a');
     link.href = url;
     link.download = fileName || 'download';
@@ -223,16 +183,10 @@ export async function downloadFile(fileId: string, fileName?: string): Promise<v
   }
 }
 
-/**
- * Delete file
- */
 export async function deleteFile(fileId: string): Promise<void> {
   await api.deleteFile(fileId);
 }
 
-/**
- * Attach file to entity
- */
 export async function attachFile(
   fileId: string,
   type: AttachmentType,
@@ -241,9 +195,6 @@ export async function attachFile(
   await api.attachFile(fileId, type, entityId);
 }
 
-/**
- * Detach file from entity
- */
 export async function detachFile(
   fileId: string,
   type: AttachmentType,

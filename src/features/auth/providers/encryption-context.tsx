@@ -65,15 +65,14 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
       setKeyBundle(decryptedBundle);
       setIsInitialized(true);
       
-      console.log('✅ Encryption keys initialized in memory');
       return true;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize encryption keys';
       setError(errorMessage);
       setKeyBundle(null);
       setIsInitialized(false);
-      console.error('❌ Failed to initialize encryption keys:', err);
       return false;
+
     } finally {
       setIsLoading(false);
     }
@@ -87,8 +86,8 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
     setKeyBundle(null);
     setIsInitialized(false);
     setError(null);
-    console.log('🧹 Encryption keys cleared from memory');
   }, []);
+
 
   /**
    * Проверяет, есть ли расшифрованные ключи в памяти

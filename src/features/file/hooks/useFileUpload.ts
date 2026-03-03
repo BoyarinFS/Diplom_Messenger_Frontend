@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { uploadFile, uploadMultipleFiles } from '@/shared/lib/file-upload';
 import type { FileMetadata, AttachmentType } from '@/shared/types';
 import type { FileUploadProgress } from '@/entities/file';
@@ -27,6 +27,14 @@ export function useFileUpload(options: UseFileUploadOptions = {}): UseFileUpload
   const [progress, setProgress] = useState<FileUploadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Используем ref для стабильных колбэков без пересоздания эффектов
+  const optionsRef = useRef(options);
+  
+  // Обновляем ref при изменении options, но не вызываем перерендер
+  useEffect(() => {
+    optionsRef.current = options;
+  });
+
   const handleProgress = useCallback((fileProgress: FileUploadProgress) => {
     setProgress(fileProgress);
   }, []);
@@ -44,28 +52,28 @@ export function useFileUpload(options: UseFileUploadOptions = {}): UseFileUpload
 
       try {
         const result = await uploadFile(file, {
-          chatId: options.chatId,
-          attachableType: options.attachableType,
-          attachableId: options.attachableId,
+          chatId: optionsRef.current.chatId,
+          attachableType: optionsRef.current.attachableType,
+          attachableId: optionsRef.current.attachableId,
           onProgress: handleProgress,
         });
 
         if (result.success && result.file) {
-          options.onSuccess?.(result.file);
+          optionsRef.current.onSuccess?.(result.file);
         } else {
           const errorMsg = result.error || 'Upload failed';
           setError(errorMsg);
-          options.onError?.(errorMsg);
+          optionsRef.current.onError?.(errorMsg);
         }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Upload failed';
         setError(errorMsg);
-        options.onError?.(errorMsg);
+        optionsRef.current.onError?.(errorMsg);
       } finally {
         setIsUploading(false);
       }
     },
-    [options, handleProgress]
+    [handleProgress] // Убрали options из зависимостей
   );
 
   const uploadMultiple = useCallback(
@@ -75,9 +83,9 @@ export function useFileUpload(options: UseFileUploadOptions = {}): UseFileUpload
 
       try {
         const results = await uploadMultipleFiles(files, {
-          chatId: options.chatId,
-          attachableType: options.attachableType,
-          attachableId: options.attachableId,
+          chatId: optionsRef.current.chatId,
+          attachableType: optionsRef.current.attachableType,
+          attachableId: optionsRef.current.attachableId,
           onProgress: handleProgress,
         });
 
@@ -85,25 +93,25 @@ export function useFileUpload(options: UseFileUploadOptions = {}): UseFileUpload
         if (failedUploads.length > 0) {
           const errorMsg = `Failed to upload ${failedUploads.length} file(s)`;
           setError(errorMsg);
-          options.onError?.(errorMsg);
+          optionsRef.current.onError?.(errorMsg);
         }
 
         // Call onSuccess for each successful upload
         results.forEach((result) => {
           if (result.success && result.file) {
-            options.onSuccess?.(result.file);
+            optionsRef.current.onSuccess?.(result.file);
           }
         });
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Upload failed';
         setError(errorMsg);
-        options.onError?.(errorMsg);
+        optionsRef.current.onError?.(errorMsg);
       } finally {
         setIsUploading(false);
         setProgress(null);
       }
     },
-    [options, handleProgress]
+    [handleProgress] // Убрали options из зависимостей
   );
 
   const reset = useCallback(() => {

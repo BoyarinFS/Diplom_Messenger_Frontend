@@ -159,7 +159,8 @@ export class X3DH {
     return data.slice(0, 32);
   }
 
-  private static base64ToArray(base64: string): Uint8Array {
+  static base64ToArray(base64: string): Uint8Array {
+
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) {

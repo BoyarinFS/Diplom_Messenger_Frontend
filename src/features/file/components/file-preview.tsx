@@ -173,11 +173,13 @@ export function CompactFilePreview({ file, className }: CompactFilePreviewProps)
   const category = getFileCategory(file.mimeType);
   const isImage = category === 'image';
 
-  if (isImage && file.thumbnailUrl) {
+  if (isImage) {
+    // Use thumbnail if available, otherwise use full URL
+    const imageUrl = file.thumbnailUrl || file.url;
     return (
       <div className={cn('relative group', className)}>
         <img
-          src={file.thumbnailUrl}
+          src={imageUrl}
           alt={file.fileName}
           className="max-w-[200px] max-h-[150px] rounded-lg object-cover cursor-pointer hover:opacity-90 transition-opacity"
           onClick={() => window.open(file.url, '_blank')}
@@ -195,6 +197,7 @@ export function CompactFilePreview({ file, className }: CompactFilePreviewProps)
       </div>
     );
   }
+
 
   return (
     <div

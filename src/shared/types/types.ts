@@ -18,12 +18,6 @@ export interface RegistrationRequest {
   lastname: string;
 }
 
-export interface AccountKeysResponse {
-  identityPrivateKey: string;
-  signedPreKeyPrivate: string;
-  oneTimePreKeys: string[];
-}
-
 export interface AuthResponse {
   token: string;
   email: string;
@@ -36,7 +30,6 @@ export interface AuthResponse {
     birthday?: string;
   };
   status: AccountStatus;
-  accountKeysResponse?: AccountKeysResponse;
 }
 
 
@@ -143,103 +136,23 @@ export interface UpdateChatRequest {
   adminId?: string;
 }
 
-// DM Chat Types
 export interface CreateDmRequest {
   authorUsername: string;
   receiverUsername: string;
-  chatIdentifierName: string;
-}
-
-export interface ReceiverKeys {
-  identityPublicKey: string;
-  signedPreKeyPublic: string;
-  signedPreKeySignature: string;
-  oneTimePreKey: string;
 }
 
 export interface CreateDmResponse {
   chat: ChatFull;
-  members: ChatMember[];
   receiverKeys: ReceiverKeys;
 }
 
 export interface GetDmKeysResponse {
   chat: ChatFull;
-  members: ChatMember[];
   receiverKeys: ReceiverKeys;
 }
 
-// Encryption Types
-export interface KeyBundleRequest {
-  identityPublicKey: string;
-  identityPrivateKey: string;
-  signedPreKeyPublic: string;
-  signedPreKeyPrivate: string;
-  signedPreKeySignature: string;
-  oneTimePreKeys: string[];
-}
-
-export interface RegistrationRequestWithKeys extends RegistrationRequest {
-  about?: string;
-  keyBundleRequest: KeyBundleRequest;
-}
-
-export interface EncryptedPrivateKeys {
-  identityPrivateKey: string;
-  signedPreKeyPrivate: string;
-  oneTimePreKeys: string[];
-}
-
-// File Upload Types
-export type AttachmentType = 'image' | 'video' | 'audio' | 'document' | 'other';
-
-export interface FileMetadata {
-  uuid?: string;
-  fileName: string;
-  fileSize: number;
-  mimeType: string;
-  width?: number;
-  height?: number;
-  duration?: number;
-  url?: string;
-  thumbnailUrl?: string;
-  blurHash?: string;
-  uploaderId?: string;
-  uploaderUsername?: string;
-  createdAt?: string;
-}
-
-export interface UploadUrlRequest {
-  fileName: string;
-  fileSize: number;
-  mimeType: string;
-  contentType?: string;
-  chatId?: string;
-}
-
-export interface UploadUrlResponse {
-  url: string;
-  objectKey: string;
-  publicUrl: string;
-}
-
-export interface ConfirmUploadRequest {
-  fileId?: string;
-  objectKey: string;
-  fileName: string;
-  fileSize: number;
-  mimeType: string;
-  width?: number;
-  height?: number;
-  attachableType?: AttachmentType;
-  attachableId?: string;
-}
-
-export interface DownloadUrlResponse {
-  url: string;
-}
-
 export interface UpdateAccountRequest {
+
   firstname?: string;
   lastname?: string;
   bio?: string;
@@ -251,4 +164,71 @@ export interface VerifyEmailRequest {
 
 export interface ResendVerificationRequest {
   email: string;
+}
+
+// Encryption Types
+
+export interface ReceiverKeys {
+  identityPublicKey: string;
+  signedPreKeyPublic: string;
+  signedPreKeySignature: string;
+  oneTimePreKey?: string;
+}
+
+// File Management Types
+
+
+export type AttachmentType = 'MESSAGE' | 'PROFILE' | 'CHAT';
+
+export interface FileMetadata {
+  uuid: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  duration?: number;
+  url: string;
+  thumbnailUrl?: string;
+  blurHash?: string;
+  uploaderId: string;
+  uploaderUsername: string;
+  createdAt: string;
+}
+
+export interface UploadUrlRequest {
+  fileName: string;
+  contentType: string;
+  fileSize: number;
+  chatId?: string | null;
+}
+
+export interface UploadUrlResponse {
+  url: string;
+  objectKey: string;
+  publicUrl: string;
+}
+
+export interface ConfirmUploadRequest {
+  objectKey: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  duration?: number;
+  thumbnailKey?: string;
+  blurHash?: string;
+  attachableType?: AttachmentType;
+  attachableId?: string;
+}
+
+export interface FileAttachment {
+  fileId: string;
+  type: AttachmentType;
+  entityId: string;
+}
+
+export interface DownloadUrlResponse {
+  url: string;
 }

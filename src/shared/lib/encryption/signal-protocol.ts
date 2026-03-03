@@ -135,42 +135,24 @@ export class SignalProtocolManager {
     signedPreKeyPrivate: Uint8Array;
     oneTimePreKeys: Uint8Array[];
   }> {
-    console.log('decryptPrivateKeys - starting...');
-    console.log('identityPrivateKey length:', encryptedKeys.identityPrivateKey?.length);
-    console.log('signedPreKeyPrivate length:', encryptedKeys.signedPreKeyPrivate?.length);
-    
     const identityData = this.base64ToArray(encryptedKeys.identityPrivateKey);
-    console.log('identityData length:', identityData.length);
-    
     const salt = identityData.slice(0, 16);
-    console.log('salt:', this.arrayBufferToBase64(salt));
-    
     const encryptedIdentity = identityData.slice(16);
-    console.log('encryptedIdentity length:', encryptedIdentity.length);
     
     const keyMaterial = await this.deriveKeyFromPassword(password, salt);
-    console.log('keyMaterial derived successfully');
-    
     const identityPrivateKey = await this.decryptWithAes(encryptedIdentity, keyMaterial);
-    console.log('identityPrivateKey decrypted, length:', identityPrivateKey.length);
     
     const signedPreKeyData = this.base64ToArray(encryptedKeys.signedPreKeyPrivate);
-    console.log('signedPreKeyData length:', signedPreKeyData.length);
-    
     const signedPreKeyPrivate = await this.decryptWithAes(
       signedPreKeyData.slice(16),
       keyMaterial
     );
-    console.log('signedPreKeyPrivate decrypted, length:', signedPreKeyPrivate.length);
 
     let oneTimePreKeys: Uint8Array[] = [];
     if (encryptedKeys.oneTimePreKeys && encryptedKeys.oneTimePreKeys.length > 0) {
       const oneTimeKeysData = this.base64ToArray(encryptedKeys.oneTimePreKeys[0]).slice(16);
       const oneTimeKeysConcatenated = await this.decryptWithAes(oneTimeKeysData, keyMaterial);
       oneTimePreKeys = this.splitArray(oneTimeKeysConcatenated, X25519_KEY_LENGTH);
-      console.log('oneTimePreKeys decrypted, count:', oneTimePreKeys.length);
-    } else {
-      console.log('No oneTimePreKeys to decrypt');
     }
 
     return {
@@ -179,6 +161,7 @@ export class SignalProtocolManager {
       oneTimePreKeys,
     };
   }
+
 
 
   private async deriveKeyFromPassword(password: string, salt: Uint8Array): Promise<CryptoKey> {
