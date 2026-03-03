@@ -1,4 +1,5 @@
 export { Button } from './button';
+
 export { Input } from './input';
 export { ScrollArea } from './scroll-area';
 export {
@@ -24,5 +25,7 @@ export { Label } from './label';
 export { Switch } from './switch';
 export { Textarea } from './textarea';
 export { Popover, PopoverContent, PopoverTrigger } from './popover';
+export { Progress } from './progress';
 export { Toaster } from './toaster';
+
 export { useToast, toast } from './use-toast';

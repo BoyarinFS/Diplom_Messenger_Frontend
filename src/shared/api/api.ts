@@ -1,9 +1,9 @@
-// Используем прокси через Next.js API routes для работы с куками (same-origin)
 const API_BASE_URL = '/api/proxy';
 
 import type {
   AuthRequest,
   RegistrationRequest,
+  RegistrationRequestWithKeys,
   AuthResponse,
   Account,
   AccountStatus,
@@ -17,32 +17,79 @@ import type {
   CreateChatRequest,
   UpdateChatRequest,
   CreateDmRequest,
+  CreateDmResponse,
+  GetDmKeysResponse,
   UpdateAccountRequest,
+  FileMetadata,
+  UploadUrlRequest,
+  UploadUrlResponse,
+  ConfirmUploadRequest,
+  AttachmentType,
+  DownloadUrlResponse,
 } from '@/shared/types';
 
+
+const pendingRequests = new Map<string, Promise<unknown>>();
+const getCache = new Map<string, { data: unknown; timestamp: number }>();
+const CACHE_TTL = 5000;
+
+
 class ApiClient {
-  private async request<T>(
+  private baseHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  async request<T>(
     endpoint: string,
     options: RequestInit = {},
+    useCache = false,
   ): Promise<T> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...(options.headers as Record<string, string>),
-    };
-
-    // Кука auth_token отправляется автоматически браузером
-    // (HttpOnly кука установлена на / пути)
-
-    // Убираем /api/v1 префикс так как прокси уже добавляет его
     const cleanEndpoint = endpoint.startsWith('/api/v1') 
-      ? endpoint.replace('/api/v1', '') 
+      ? endpoint.slice(7)
       : endpoint;
     const url = `${API_BASE_URL}${cleanEndpoint}`;
+
+    const cacheKey = `${options.method || 'GET'}:${url}:${JSON.stringify(options.body)}`;
+
+    if (options.method === 'GET' || !options.method) {
+      const pending = pendingRequests.get(cacheKey);
+      if (pending) {
+        return pending as Promise<T>;
+      }
+    }
+
+    if (useCache && (!options.method || options.method === 'GET')) {
+      const cached = getCache.get(url);
+      if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return cached.data as T;
+      }
+    }
+
+    const requestPromise = this.executeRequest<T>(url, options, useCache);
     
+    if (options.method === 'GET' || !options.method) {
+      pendingRequests.set(cacheKey, requestPromise);
+      requestPromise.finally(() => {
+        pendingRequests.delete(cacheKey);
+      });
+    }
+
+    return requestPromise;
+  }
+
+
+  private async executeRequest<T>(
+    url: string,
+    options: RequestInit,
+    useCache: boolean,
+  ): Promise<T> {
     const response = await fetch(url, {
       ...options,
-      headers,
-      // credentials не нужен - same-origin запрос
+      headers: {
+        ...this.baseHeaders,
+        ...(options.headers as Record<string, string>),
+      },
+      credentials: 'include',
     });
 
     if (!response.ok) {
@@ -71,15 +118,22 @@ class ApiClient {
       );
     }
 
-    return response.json();
+    const data = await response.json();
+
+    if (useCache) {
+      getCache.set(url, { data, timestamp: Date.now() });
+    }
+
+    return data;
   }
 
-  // Auth endpoints (через API routes для установки кук)
+  // Auth endpoints
   async login(credentials: AuthRequest): Promise<AuthResponse> {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.baseHeaders,
       body: JSON.stringify(credentials),
+      credentials: 'include',
     });
 
     if (!res.ok) {
@@ -93,8 +147,25 @@ class ApiClient {
   async register(data: RegistrationRequest): Promise<AuthResponse> {
     const res = await fetch('/api/auth/register', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.baseHeaders,
       body: JSON.stringify(data),
+      credentials: 'include',
+    });
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ message: 'Registration failed' }));
+      throw new Error(error.message || 'Registration failed');
+    }
+
+    return res.json();
+  }
+
+  async registerWithKeys(data: RegistrationRequestWithKeys): Promise<AuthResponse> {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: this.baseHeaders,
+      body: JSON.stringify(data),
+      credentials: 'include',
     });
 
     if (!res.ok) {
@@ -108,6 +179,7 @@ class ApiClient {
   async logout(): Promise<void> {
     const res = await fetch('/api/auth/logout', {
       method: 'POST',
+      credentials: 'include',
     });
 
     if (!res.ok) {
@@ -118,8 +190,9 @@ class ApiClient {
   async setOAuthToken(token: string, user: Account): Promise<void> {
     const res = await fetch('/api/auth/oauth', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.baseHeaders,
       body: JSON.stringify({ token, user }),
+      credentials: 'include',
     });
 
     if (!res.ok) {
@@ -127,7 +200,6 @@ class ApiClient {
     }
   }
 
-  // Прямые запросы к бэкенду (с автоматической отправкой кук)
   async verifyEmail(code: string, email: string): Promise<void> {
     return this.request('/auth/verify-email', {
       method: 'POST',
@@ -141,24 +213,19 @@ class ApiClient {
     });
   }
 
-
-  // Account endpoints
   async getAccount(accountId: string): Promise<Account> {
-    return this.request(`/accounts/${accountId}`);
+    return this.request(`/accounts/${accountId}`, {}, true);
   }
 
   async getAccountChats(accountId: string): Promise<ChatShortcut[]> {
-    return this.request(`/accounts/${accountId}/chats`);
+    return this.request(`/accounts/${accountId}/chats`, {}, true);
   }
 
   async searchAccounts(query: string): Promise<Account[]> {
     return this.request(`/accounts/search/${encodeURIComponent(query)}`);
   }
 
-  async updateAccount(
-    accountId: string,
-    data: UpdateAccountRequest,
-  ): Promise<Account> {
+  async updateAccount(accountId: string, data: UpdateAccountRequest): Promise<Account> {
     return this.request(`/accounts/${accountId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -171,7 +238,14 @@ class ApiClient {
     });
   }
 
-  // Chat endpoints
+  async getAccountKeys(accountId: string): Promise<{ identityPrivateKey: string; signedPreKeyPrivate: string } | null> {
+    try {
+      return await this.request(`/accounts/${accountId}/keys`);
+    } catch {
+      return null;
+    }
+  }
+
   async createChat(data: CreateChatRequest): Promise<ChatFull> {
     return this.request('/chats', {
       method: 'POST',
@@ -180,7 +254,7 @@ class ApiClient {
   }
 
   async getChat(chatId: string): Promise<ChatFull> {
-    return this.request(`/chats/${chatId}`);
+    return this.request(`/chats/${chatId}`, {}, true);
   }
 
   async updateChat(chatId: string, data: UpdateChatRequest): Promise<ChatFull> {
@@ -196,12 +270,15 @@ class ApiClient {
     });
   }
 
-  // DM endpoints
-  async createDmChat(data: CreateDmRequest): Promise<ChatFull> {
+  async createDmChat(data: CreateDmRequest): Promise<CreateDmResponse> {
     return this.request('/dm', {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  }
+
+  async getDmKeys(chatId: string): Promise<GetDmKeysResponse> {
+    return this.request(`/dm/${chatId}/keys`, {}, true);
   }
 
   async deleteDmChat(chatId: string): Promise<void> {
@@ -210,12 +287,8 @@ class ApiClient {
     });
   }
 
-  // Chat member endpoints
-  async addChatMember(
-    chatId: string,
-    memberId: string,
-    roleId?: string,
-  ): Promise<ChatMember> {
+
+  async addChatMember(chatId: string, memberId: string, roleId?: string): Promise<ChatMember> {
     return this.request(`/chats/${chatId}/members`, {
       method: 'POST',
       body: JSON.stringify({ memberId, roleId }),
@@ -228,39 +301,25 @@ class ApiClient {
     });
   }
 
-  async updateChatMemberRole(
-    chatId: string,
-    memberId: string,
-    roleId: string,
-  ): Promise<ChatMember> {
+  async updateChatMemberRole(chatId: string, memberId: string, roleId: string): Promise<ChatMember> {
     return this.request(`/chats/${chatId}/members/${memberId}/role`, {
       method: 'PUT',
       body: JSON.stringify({ roleId }),
     });
   }
 
-  // Chat role endpoints
   async getChatRoles(chatId: string): Promise<ChatCustomRole[]> {
-    return this.request(`/chats/${chatId}/roles`);
+    return this.request(`/chats/${chatId}/roles`, {}, true);
   }
 
-  async createChatRole(
-    chatId: string,
-    name: string,
-    permissionIds: string[],
-  ): Promise<ChatCustomRole> {
+  async createChatRole(chatId: string, name: string, permissionIds: string[]): Promise<ChatCustomRole> {
     return this.request(`/chats/${chatId}/roles`, {
       method: 'POST',
       body: JSON.stringify({ name, permissionIds }),
     });
   }
 
-  async updateChatRole(
-    chatId: string,
-    roleId: string,
-    name: string,
-    permissionIds: string[],
-  ): Promise<ChatCustomRole> {
+  async updateChatRole(chatId: string, roleId: string, name: string, permissionIds: string[]): Promise<ChatCustomRole> {
     return this.request(`/chats/${chatId}/roles/${roleId}`, {
       method: 'PUT',
       body: JSON.stringify({ name, permissionIds }),
@@ -273,59 +332,56 @@ class ApiClient {
     });
   }
 
-  // Message endpoints
-  async getChatMessages(
-    chatId: string,
-    page = 0,
-  ): Promise<Message[] | { messages: Message[] }> {
+  async getChatMessages(chatId: string, page = 0): Promise<Message[] | { messages: Message[] }> {
     return this.request(`/chats/${chatId}/messages?page=${page}`);
   }
 
-  async getThreadMessages(
-    chatId: string,
-    threadRootId: string,
-    page = 0,
-  ): Promise<Message[] | { messages: Message[] }> {
-    return this.request(
-      `/chats/${chatId}/messages/thread/${threadRootId}?page=${page}`,
-    );
+  async getThreadMessages(chatId: string, threadRootId: string, page = 0): Promise<Message[] | { messages: Message[] }> {
+    return this.request(`/chats/${chatId}/messages/thread/${threadRootId}?page=${page}`);
   }
 
-  async sendMessage(chatId: string, content: string): Promise<Message> {
+  async sendMessage(chatId: string, content: string, fileIds?: string[]): Promise<Message> {
     return this.request(`/chats/${chatId}/messages/regular`, {
       method: 'POST',
-      body: JSON.stringify({ text: content }),
+      body: JSON.stringify({ text: content, fileIds }),
     });
   }
 
-  async sendReply(chatId: string, data: CreateReplyRequest): Promise<Message> {
+  async sendEncryptedMessage(chatId: string, encryptedContent: string, fileIds?: string[]): Promise<Message> {
+    return this.request(`/chats/${chatId}/messages/regular`, {
+      method: 'POST',
+      body: JSON.stringify({ 
+        text: encryptedContent,  // Зашифрованный текст (JSON строка)
+        fileIds,
+        isEncrypted: true,  // Флаг для бэкенда
+      }),
+    });
+  }
+
+
+  async sendReply(chatId: string, data: CreateReplyRequest, fileIds?: string[]): Promise<Message> {
     return this.request(`/chats/${chatId}/messages/reply`, {
       method: 'POST',
       body: JSON.stringify({
         text: data.content,
         parentMessageId: data.repliedMessageId,
+        fileIds,
       }),
     });
   }
 
-  async sendThreadMessage(
-    chatId: string,
-    data: CreateThreadRequest,
-  ): Promise<Message> {
+  async sendThreadMessage(chatId: string, data: CreateThreadRequest, fileIds?: string[]): Promise<Message> {
     return this.request(`/chats/${chatId}/messages/thread`, {
       method: 'POST',
       body: JSON.stringify({
         text: data.content,
         threadRootMessageId: data.threadRootMessageId,
+        fileIds,
       }),
     });
   }
 
-  async updateMessage(
-    chatId: string,
-    messageId: string,
-    content: string,
-  ): Promise<Message> {
+  async updateMessage(chatId: string, messageId: string, content: string): Promise<Message> {
     return this.request(`/chats/${chatId}/messages/${messageId}`, {
       method: 'PUT',
       body: JSON.stringify({ content }),
@@ -337,7 +393,60 @@ class ApiClient {
       method: 'DELETE',
     });
   }
+
+  // File management endpoints
+  async getUploadUrl(request: UploadUrlRequest): Promise<UploadUrlResponse> {
+    return this.request('/files/upload-url', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  async confirmUpload(request: ConfirmUploadRequest): Promise<FileMetadata> {
+    return this.request('/files/confirm', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  async getFile(fileId: string): Promise<FileMetadata> {
+    return this.request(`/files/${fileId}`, {}, true);
+  }
+
+  async deleteFile(fileId: string): Promise<void> {
+    return this.request(`/files/${fileId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getDownloadUrl(fileId: string): Promise<DownloadUrlResponse> {
+    return this.request(`/files/${fileId}/download-url`, {}, true);
+  }
+
+  async getUserFiles(userId: string): Promise<FileMetadata[]> {
+    return this.request(`/files/user/${userId}`, {}, true);
+  }
+
+  async getEntityAttachments(type: AttachmentType, id: string): Promise<FileMetadata[]> {
+    return this.request(`/files/attachments?type=${type}&id=${id}`, {}, true);
+  }
+
+  async attachFile(fileId: string, type: AttachmentType, id: string): Promise<void> {
+    return this.request(`/files/${fileId}/attach?type=${type}&id=${id}`, {
+      method: 'POST',
+    });
+  }
+
+  async detachFile(fileId: string, type: AttachmentType, id: string): Promise<void> {
+    return this.request(`/files/${fileId}/attach?type=${type}&id=${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  clearCache(): void {
+    getCache.clear();
+  }
 }
 
 export const api = new ApiClient();
-export type { Message, ChatShortcut, Account };
+export type { Message, ChatShortcut, Account, FileMetadata };

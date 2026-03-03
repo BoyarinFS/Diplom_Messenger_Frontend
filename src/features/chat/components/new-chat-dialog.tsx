@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { api } from '@/shared/api';
 import { type Account } from '@/shared/types';
 import { useAuth } from '@/features/auth/providers/auth-context';
+import { useChatEncryption } from '@/features/chat/hooks/use-chat-encryption';
+
 import { Button } from '@/shared/ui/button';
 import { Input } from '@/shared/ui/input';
 import {
@@ -31,6 +33,7 @@ export function NewChatDialog({
   onChatCreated,
 }: NewChatDialogProps) {
   const { user: currentUser } = useAuth();
+  const { initializeDmEncryption, isLoading: isEncrypting } = useChatEncryption();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Account[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -81,21 +84,32 @@ export function NewChatDialog({
         throw new Error('User not authenticated');
       }
 
+      // 1. Создаём DM чат
       const response = await api.createDmChat({
         authorUsername: currentUser.username,
         receiverUsername: recipientAccount.username,
+        chatIdentifierName: `dm_${currentUser.username}_${recipientAccount.username}`,
       });
 
       console.log('✅ DM Chat created:', response);
-      // В заголовке и списке чатов показываем имя собеседника
+
+      // 2. Инициализируем шифрование (без пароля - используем расшифрованные ключи из контекста)
+      const encryptionInitialized = await initializeDmEncryption(response, true);
+      
+      if (encryptionInitialized) {
+        console.log('✅ Encryption initialized for DM chat');
+      } else {
+        console.warn('⚠️ Failed to initialize encryption for DM chat');
+        // Продолжаем без шифрования или показываем предупреждение
+      }
+
       const displayName = `${recipientAccount.firstname} ${recipientAccount.lastname}`.trim() ||
         `@${recipientAccount.username}`;
-      onChatCreated(response.uuid, displayName);
+      onChatCreated(response.chat.uuid, displayName);
       onOpenChange(false);
       resetForm();
     } catch (error: any) {
       console.error('❌ Failed to create DM:', error);
-      // Show user-friendly error message
       alert(`Failed to create chat: ${error.message || 'Unknown error'}`);
     } finally {
       setIsCreating(false);
@@ -112,9 +126,6 @@ export function NewChatDialog({
         name: groupName.trim(),
         description: groupDescription.trim() || undefined,
         adminId: currentUser!.uuid,
-        // Backend already uses adminId to create ChatMember for the admin,
-        // so we must not duplicate the same user in membersIds.
-        // Here we only send additional members (currently none).
         membersIds: [],
         public: isPublic,
       });
@@ -184,7 +195,7 @@ export function NewChatDialog({
                     <button
                       key={account.uuid}
                       onClick={() => handleCreateDm(account)}
-                      disabled={isCreating}
+                      disabled={isCreating || isEncrypting}
                       className="w-full p-3 rounded-lg flex items-center gap-3 hover:bg-accent transition-colors"
                     >
                       <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground">

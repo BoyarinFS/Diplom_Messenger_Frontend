@@ -141,7 +141,18 @@ export interface CreateDmRequest {
   receiverUsername: string;
 }
 
+export interface CreateDmResponse {
+  chat: ChatFull;
+  receiverKeys: ReceiverKeys;
+}
+
+export interface GetDmKeysResponse {
+  chat: ChatFull;
+  receiverKeys: ReceiverKeys;
+}
+
 export interface UpdateAccountRequest {
+
   firstname?: string;
   lastname?: string;
   bio?: string;
@@ -153,4 +164,71 @@ export interface VerifyEmailRequest {
 
 export interface ResendVerificationRequest {
   email: string;
+}
+
+// Encryption Types
+
+export interface ReceiverKeys {
+  identityPublicKey: string;
+  signedPreKeyPublic: string;
+  signedPreKeySignature: string;
+  oneTimePreKey?: string;
+}
+
+// File Management Types
+
+
+export type AttachmentType = 'MESSAGE' | 'PROFILE' | 'CHAT';
+
+export interface FileMetadata {
+  uuid: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  duration?: number;
+  url: string;
+  thumbnailUrl?: string;
+  blurHash?: string;
+  uploaderId: string;
+  uploaderUsername: string;
+  createdAt: string;
+}
+
+export interface UploadUrlRequest {
+  fileName: string;
+  contentType: string;
+  fileSize: number;
+  chatId?: string | null;
+}
+
+export interface UploadUrlResponse {
+  url: string;
+  objectKey: string;
+  publicUrl: string;
+}
+
+export interface ConfirmUploadRequest {
+  objectKey: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  duration?: number;
+  thumbnailKey?: string;
+  blurHash?: string;
+  attachableType?: AttachmentType;
+  attachableId?: string;
+}
+
+export interface FileAttachment {
+  fileId: string;
+  type: AttachmentType;
+  entityId: string;
+}
+
+export interface DownloadUrlResponse {
+  url: string;
 }
