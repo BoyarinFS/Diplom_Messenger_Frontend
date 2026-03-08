@@ -18,6 +18,13 @@ export interface RegistrationRequest {
   lastname: string;
 }
 
+// Encryption Types
+
+export interface AccountKeysResponse {
+  identityPrivateKey: string;
+  signedPreKeyPrivate: string;
+}
+
 export interface AuthResponse {
   token: string;
   email: string;
@@ -30,6 +37,7 @@ export interface AuthResponse {
     birthday?: string;
   };
   status: AccountStatus;
+  accountKeysResponse?: AccountKeysResponse;
 }
 
 
@@ -105,6 +113,7 @@ export interface Message {
   parentMessageId?: string;
   threadRootMessageId?: string;
   threadMessagesCount?: number;
+  isEncrypted?: boolean;
 }
 
 export interface CreateMessageRequest {
@@ -139,11 +148,13 @@ export interface UpdateChatRequest {
 export interface CreateDmRequest {
   authorUsername: string;
   receiverUsername: string;
+  chatIdentifierName?: string;
 }
 
 export interface CreateDmResponse {
   chat: ChatFull;
   receiverKeys: ReceiverKeys;
+  isCreator: boolean;
 }
 
 export interface GetDmKeysResponse {

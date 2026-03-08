@@ -3,7 +3,6 @@ const API_BASE_URL = '/api/proxy';
 import type {
   AuthRequest,
   RegistrationRequest,
-  RegistrationRequestWithKeys,
   AuthResponse,
   Account,
   AccountStatus,
@@ -27,6 +26,7 @@ import type {
   AttachmentType,
   DownloadUrlResponse,
 } from '@/shared/types';
+import type { RegistrationRequestWithKeys } from '@/shared/lib/encryption';
 
 
 const pendingRequests = new Map<string, Promise<unknown>>();

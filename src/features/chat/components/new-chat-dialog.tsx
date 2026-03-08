@@ -93,11 +93,16 @@ export function NewChatDialog({
 
       console.log('✅ DM Chat created:', response);
 
-      // 2. Инициализируем шифрование (без пароля - используем расшифрованные ключи из контекста)
-      const encryptionInitialized = await initializeDmEncryption(response, true);
+      // 2. Получаем ключи собеседника
+      const dmKeys = await api.getDmKeys(response.chat.uuid);
+      console.log('🔑 DM Keys received:', dmKeys);
+
+      // 3. Инициализируем шифрование
+      // Используем isCreator из ответа сервера, чтобы определить роль (Alice/Bob)
+      const encryptionInitialized = await initializeDmEncryption(dmKeys, response.isCreator);
       
       if (encryptionInitialized) {
-        console.log('✅ Encryption initialized for DM chat');
+        console.log(`✅ Encryption initialized for DM chat (${response.isCreator ? 'Alice - creator' : 'Bob - receiver'})`);
       } else {
         console.warn('⚠️ Failed to initialize encryption for DM chat');
         // Продолжаем без шифрования или показываем предупреждение

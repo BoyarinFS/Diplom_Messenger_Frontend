@@ -5,6 +5,7 @@ export { DoubleRatchet } from './double-ratchet';
 export { keyStorage } from './key-storage';
 export type {
   KeyBundleRequest,
+  RegistrationRequestWithKeys,
   UserKeyBundle,
   EncryptedPrivateKeys,
   PublicKeyBundle,

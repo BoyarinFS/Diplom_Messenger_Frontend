@@ -35,6 +35,9 @@ interface EncryptionContextType {
 
 const EncryptionContext = createContext<EncryptionContextType | undefined>(undefined);
 
+// Храним пароль в памяти (не в localStorage!)
+let savedPassword: string | null = null;
+
 export function EncryptionProvider({ children }: { children: ReactNode }) {
   // Храним расшифрованные ключи ТОЛЬКО в памяти (не в localStorage!)
   const [keyBundle, setKeyBundle] = useState<DecryptedKeyBundle | null>(null);
@@ -86,6 +89,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
     setKeyBundle(null);
     setIsInitialized(false);
     setError(null);
+    savedPassword = null;
   }, []);
 
 
@@ -96,18 +100,64 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
     return keyBundle !== null;
   }, [keyBundle]);
 
+  // При загрузке - пробуем инициализировать если есть пароль в sessionStorage
+  useEffect(() => {
+    const tryAutoInit = async () => {
+      console.log('🔍 Checking for saved password...');
+      let password: string | null = null;
+      
+      // Сначала проверяем глобальную переменную
+      if (savedPassword) {
+        console.log('📝 Found password in savedPassword variable');
+        password = savedPassword;
+      }
+      
+      // Пробуем из sessionStorage
+      if (!password && typeof window !== 'undefined') {
+        try {
+          password = sessionStorage.getItem('user_password');
+          console.log('📝 Found password in sessionStorage:', !!password);
+        } catch (e) {
+          console.warn('Could not read password from sessionStorage');
+        }
+      }
+      
+      if (password) {
+        console.log('🔑 Auto-initializing encryption keys with password...');
+        const result = await initializeKeys(password);
+        console.log('🔑 Auto-init result:', result);
+      } else {
+        console.log('❌ No password found for auto-init');
+      }
+    };
+
+    tryAutoInit();
+  }, [initializeKeys]);
+
   // Слушаем событие login для автоматической инициализации ключей
   useEffect(() => {
     const handleLogin = (event: Event) => {
       const customEvent = event as CustomEvent<{ password: string }>;
       const { password } = customEvent.detail;
       if (password) {
+        // Сохраняем пароль
+        savedPassword = password;
+        // Сохраняем в sessionStorage
+        try {
+          sessionStorage.setItem('user_password', password);
+        } catch (e) {
+          console.warn('Could not save password to sessionStorage');
+        }
         initializeKeys(password);
       }
     };
 
     const handleLogout = () => {
       clearKeys();
+      savedPassword = null;
+      try {
+        sessionStorage.removeItem('user_password');
+      } catch (e) {}
     };
 
     window.addEventListener('encryption:login', handleLogin);
@@ -144,3 +194,4 @@ export function useEncryption() {
   }
   return context;
 }
+

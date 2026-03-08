@@ -355,4 +355,33 @@
   .animate-slide-in-from-right {
     animation: slide-in-from-right 0.3s ease-out;
   }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .rounded-\[18px\] {
+    border-radius: 18px;
+  }
+
+  .rounded-br-\[6px\] {
+    border-bottom-right-radius: 6px;
+  }
+
+  .rounded-bl-\[6px\] {
+    border-bottom-left-radius: 6px;
+  }
+
+  .rounded-tr-\[18px\] {
+    border-top-right-radius: 18px;
+  }
+
+  .rounded-tl-\[18px\] {
+    border-top-left-radius: 18px;
+  }
 }

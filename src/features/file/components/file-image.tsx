@@ -4,7 +4,6 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { api } from '@/shared/api';
 import { Loader2, ImageOff } from 'lucide-react';
 
-// Глобальный кэш URL файлов
 const urlCache = new Map<string, string>();
 
 interface FileImageProps {
@@ -13,14 +12,14 @@ interface FileImageProps {
   thumbnailUrl?: string | null;
   className?: string;
   onClick?: () => void;
+  style?: React.CSSProperties;
 }
 
-function FileImageComponent({ fileId, fileName, thumbnailUrl, className = '', onClick }: FileImageProps) {
-  // Стабильная начальная инициализация - только один раз при монтировании
+function FileImageComponent({ fileId, fileName, thumbnailUrl, className = '', onClick, style }: FileImageProps) {
   const initialUrl = useMemo(() => {
     if (thumbnailUrl) return thumbnailUrl;
     return urlCache.get(fileId) || null;
-  }, []); // Пустой массив зависимостей - выполняется только при монтировании
+  }, []);
 
   const [url, setUrl] = useState<string | null>(initialUrl);
   const [loading, setLoading] = useState(!initialUrl);
@@ -31,23 +30,19 @@ function FileImageComponent({ fileId, fileName, thumbnailUrl, className = '', on
   useEffect(() => {
     isMounted.current = true;
     
-    // Если уже загружали или есть URL, не делаем запрос
     if (hasLoadedRef.current || url) {
       setLoading(false);
       return;
     }
 
-    // Иначе загружаем presigned URL
     const loadUrl = async () => {
       try {
         const response = await api.getDownloadUrl(fileId);
         if (!isMounted.current) return;
         
-        // Модифицируем URL для локального MinIO
         const originalUrl = new URL(response.url);
         const modifiedUrl = `http://localhost:80/minio${originalUrl.pathname}${originalUrl.search}`;
         
-        // Сохраняем в кэш
         urlCache.set(fileId, modifiedUrl);
         hasLoadedRef.current = true;
         setUrl(modifiedUrl);
@@ -67,7 +62,7 @@ function FileImageComponent({ fileId, fileName, thumbnailUrl, className = '', on
     return () => {
       isMounted.current = false;
     };
-  }, [fileId]); // Убрали url из зависимостей - эффект выполняется только при изменении fileId
+  }, [fileId]);
 
   const handleClick = useCallback(async () => {
     if (onClick) {
@@ -75,9 +70,7 @@ function FileImageComponent({ fileId, fileName, thumbnailUrl, className = '', on
       return;
     }
 
-    // Открываем полное изображение в новой вкладке
     try {
-      // Проверяем кэш сначала
       let fullUrl = urlCache.get(fileId);
       if (!fullUrl) {
         const response = await api.getDownloadUrl(fileId);
@@ -91,7 +84,6 @@ function FileImageComponent({ fileId, fileName, thumbnailUrl, className = '', on
     }
   }, [fileId, onClick]);
 
-  // Мемоизируем рендер чтобы предотвратить мерцание
   return useMemo(() => {
     if (loading) {
       return (
@@ -114,6 +106,7 @@ function FileImageComponent({ fileId, fileName, thumbnailUrl, className = '', on
         src={url}
         alt={fileName}
         className={`object-cover cursor-pointer hover:opacity-90 transition-opacity ${className}`}
+        style={style}
         onClick={handleClick}
         onError={() => setError(true)}
       />
@@ -121,13 +114,12 @@ function FileImageComponent({ fileId, fileName, thumbnailUrl, className = '', on
   }, [url, loading, error, fileName, className, handleClick]);
 }
 
-// Экспортируем мемоизированную версию компонента
 export const FileImage = React.memo(FileImageComponent, (prevProps, nextProps) => {
-  // Сравниваем пропсы - ререндер только если изменились важные значения
   return (
     prevProps.fileId === nextProps.fileId &&
     prevProps.fileName === nextProps.fileName &&
     prevProps.thumbnailUrl === nextProps.thumbnailUrl &&
-    prevProps.className === nextProps.className
+    prevProps.className === nextProps.className &&
+    prevProps.style === nextProps.style
   );
 });

@@ -9,7 +9,8 @@ import {
 } from 'react';
 import { api } from '@/shared/api';
 import { signalProtocol, keyStorage } from '@/shared/lib/encryption';
-import type { Account, EncryptedPrivateKeys, AuthResponse } from '@/shared/types';
+import type { Account, AuthResponse } from '@/shared/types';
+import type { EncryptedPrivateKeys } from '@/shared/lib/encryption';
 
 interface AuthContextType {
   user: Account | null;
@@ -154,7 +155,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Verify they were saved
         const verifyKeys = await keyStorage.getEncryptedKeys();
         console.log('Verified keys in storage:', verifyKeys ? 'found' : 'not found');
-        
+
+        // Сохраняем пароль в sessionStorage для авто-восстановления при перезагрузке
+        try {
+          sessionStorage.setItem('user_password', password);
+          console.log('Password saved to sessionStorage');
+        } catch (e) {
+          console.warn('Could not save password to sessionStorage:', e);
+        }
+
         // Dispatch event для инициализации расшифрованных ключей в EncryptionContext
         window.dispatchEvent(new CustomEvent('encryption:login', { detail: { password } }));
       } catch (error) {
@@ -259,6 +268,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setHasEncryptionKeys(false);
       localStorage.removeItem(OAUTH_USER_KEY);
       localStorage.removeItem(USER_KEY);
+      // Очищаем пароль из sessionStorage
+      try {
+        sessionStorage.removeItem('user_password');
+      } catch (e) {}
       await keyStorage.clearKeys();
       await keyStorage.clearAllSessions();
       setIsLoading(false);
