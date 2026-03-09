@@ -192,8 +192,16 @@ export class DoubleRatchet {
     return this.sendingMessageNumber;
   }
 
+  setSendingMessageNumber(num: number): void {
+    this.sendingMessageNumber = num;
+  }
+
   getReceivingMessageNumber(): number {
     return this.receivingMessageNumber;
+  }
+
+  setReceivingMessageNumber(num: number): void {
+    this.receivingMessageNumber = num;
   }
 }
 

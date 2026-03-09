@@ -79,6 +79,7 @@ const PEER_TIMEOUT = 120000;
 const PRESENCE_SEND_INTERVAL = 25000;
 
 export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindowProps) {
+  console.log('📱 ChatWindow props:', { chatId, chatName, isDm });
   const { user } = useAuth();
   const { isConnected, isStable } = useWebSocketStatus();
   
@@ -87,7 +88,9 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     encryptMessage, 
     decryptMessage, 
     isChatEncrypted,
-    isPendingSession
+    isPendingSession,
+    hasStoredSession,
+    sessionsLoaded
   } = useChatEncryption();
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -138,39 +141,62 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
   });
 
 
+  // Главный эффект: загружаем сообщения -> получаем ключи -> расшифровываем
   useEffect(() => {
-    if (!isDm || !chatId || encryptionInitRef.current) return;
-    
-    const initEncryption = async () => {
-      if (isChatEncrypted(chatId)) {
-        setIsEncryptionReady(true);
-        setIsEncryptionPending(false);
-        return;
-      }
+    if (!chatId) return;
 
+    const initChat = async () => {
+      console.log('🚀 Starting chat initialization for:', chatId);
+      
       try {
-        const dmKeys = await api.getDmKeys(chatId);
-        if (dmKeys && dmKeys.receiverKeys) {
-          const success = await initializeDmEncryption(dmKeys, false);
-          if (success) {
-            const isActive = isChatEncrypted(chatId);
-            const isPending = isPendingSession(chatId);
-            setIsEncryptionReady(isActive);
-            setIsEncryptionPending(isPending);
+        // Шаг 1: Загружаем сообщения
+        console.log('📥 Step 1: Loading messages...');
+        setIsLoading(true);
+        const response = await api.getChatMessages(chatId);
+        const rawMessages: any[] = Array.isArray(response) ? response : response.messages || [];
+        console.log('📥 Loaded raw messages:', rawMessages.length);
+
+        // Шаг 2: Получаем ключи собеседника (все чаты - DM)
+        console.log('🔑 Step 2: Getting recipient keys...');
+        try {
+          const dmKeys = await api.getDmKeys(chatId);
+          console.log('🔑 Received keys:', !!dmKeys?.receiverKeys);
+          
+          if (dmKeys && dmKeys.receiverKeys) {
+            // Все чаты являются DM - инициализируем сессию шифрования
+            const success = await initializeDmEncryption(dmKeys, true);
+            console.log('🔑 Encryption initialized:', success);
+            setIsEncryptionReady(success);
           } else {
-            setIsEncryptionReady(false);
-            setIsEncryptionPending(false);
+            console.warn('⚠️ No receiver keys found, chat may not be DM');
           }
+        } catch (keysError) {
+          console.warn('⚠️ Failed to get keys:', keysError);
         }
-      } catch (error) {
-        setIsEncryptionReady(false);
-        setIsEncryptionPending(false);
+
+        // Шаг 3: Расшифровываем сообщения
+        console.log('🔓 Step 3: Decrypting messages...');
+        const decryptedMsgs = await Promise.all(rawMessages.map(async (msg: any) => {
+          if (msg.isEncrypted && msg.text) {
+            const decrypted = await decryptMessage(chatId, msg.text);
+            console.log('🔓 Message decrypted:', msg.uuid, '->', !!decrypted);
+            return { ...msg, text: decrypted || msg.text };
+          }
+          return msg;
+        }));
+
+        setMessages(decryptedMsgs);
+        console.log('✅ Chat initialization complete');
+      } catch (err) {
+        console.error('❌ Failed to load chat:', err);
+        setMessages([]);
+      } finally {
+        setIsLoading(false);
       }
     };
 
-    initEncryption();
-    encryptionInitRef.current = true;
-  }, [isDm, chatId, initializeDmEncryption, isChatEncrypted, isPendingSession]);
+    initChat();
+  }, [chatId]);
 
   const formatMessageTime = useCallback((dateString?: string) => {
     if (!dateString) return '';
@@ -230,49 +256,53 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     
     let decryptedText = newMsg.text || newMsg.content || '';
     if (newMsg.isEncrypted && decryptedText) {
-      const decrypted = decryptMessage(chatId, decryptedText);
-      if (decrypted) {
-        decryptedText = decrypted;
-        if (isEncryptionPending && isChatEncrypted(chatId)) {
-          setIsEncryptionReady(true);
-          setIsEncryptionPending(false);
+      decryptMessage(chatId, decryptedText).then((decrypted) => {
+        if (decrypted) {
+          decryptedText = decrypted;
+          if (isEncryptionPending && isChatEncrypted(chatId)) {
+            setIsEncryptionReady(true);
+            setIsEncryptionPending(false);
+          }
+        } else {
+          decryptedText = '[Зашифрованное сообщение]';
         }
-      } else {
+        
+        const normalized: Message & { attachments?: FileMetadata[] } = {
+          uuid: newMsg.uuid ?? `ws-${Date.now()}`,
+          text: decryptedText,
+          createdAt: newMsg.createdAt ?? new Date().toISOString(),
+          author: newMsg.author ?? user as any,
+          chatId: newMsg.chatId ?? chatId,
+          messageType: newMsg.messageType ?? 'regular',
+          parentMessageId: newMsg.parentMessageId,
+          threadRootMessageId: newMsg.threadRootMessageId,
+          threadMessagesCount: newMsg.threadMessagesCount,
+          updatedAt: newMsg.updatedAt,
+          attachments: newMsg.attachments,
+        };
+
+        // Skip empty messages without attachments
+        if (!normalized.text.trim() && (!normalized.attachments || normalized.attachments.length === 0)) return;
+
+        setMessages((prev) => {
+          const optimisticIndex = prev.findIndex(
+            (msg) => msg.uuid.startsWith('optimistic-') && 
+                     msg.text === normalized.text && 
+                     msg.author?.uuid === user?.uuid
+          );
+          if (optimisticIndex !== -1) {
+            const next = [...prev];
+            next[optimisticIndex] = normalized;
+            return next;
+          }
+          if (prev.some((msg) => msg.uuid === normalized.uuid)) return prev;
+          return [...prev, normalized];
+        });
+      }).catch(() => {
         decryptedText = '[Зашифрованное сообщение]';
-      }
+      });
+      return; // Return early, actual message will be set when promise resolves
     }
-
-    const normalized: Message & { attachments?: FileMetadata[] } = {
-      uuid: newMsg.uuid ?? `ws-${Date.now()}`,
-      text: decryptedText,
-      createdAt: newMsg.createdAt ?? new Date().toISOString(),
-      author: newMsg.author ?? user as any,
-      chatId: newMsg.chatId ?? chatId,
-      messageType: newMsg.messageType ?? 'regular',
-      parentMessageId: newMsg.parentMessageId,
-      threadRootMessageId: newMsg.threadRootMessageId,
-      threadMessagesCount: newMsg.threadMessagesCount,
-      updatedAt: newMsg.updatedAt,
-      attachments: newMsg.attachments,
-    };
-
-    // Skip empty messages without attachments
-    if (!normalized.text.trim() && (!normalized.attachments || normalized.attachments.length === 0)) return;
-
-    setMessages((prev) => {
-      const optimisticIndex = prev.findIndex(
-        (msg) => msg.uuid.startsWith('optimistic-') && 
-                 msg.text === normalized.text && 
-                 msg.author?.uuid === user?.uuid
-      );
-      if (optimisticIndex !== -1) {
-        const next = [...prev];
-        next[optimisticIndex] = normalized;
-        return next;
-      }
-      if (prev.some((msg) => msg.uuid === normalized.uuid)) return prev;
-      return [...prev, normalized];
-    });
   }, [chatId, isDm, user, decryptMessage, isEncryptionPending, isChatEncrypted]);
 
   const loadMessages = useCallback(async () => {
@@ -281,13 +311,13 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
       const response = await api.getChatMessages(chatId);
       const msgs = Array.isArray(response) ? response : response.messages || [];
       
-      const decryptedMsgs = msgs.map((msg: any) => {
+      const decryptedMsgs = await Promise.all(msgs.map(async (msg: any) => {
         if (msg.isEncrypted && msg.text) {
-          const decrypted = decryptMessage(chatId, msg.text);
+          const decrypted = await decryptMessage(chatId, msg.text);
           return { ...msg, text: decrypted || msg.text };
         }
         return msg;
-      });
+      }));
       
       setMessages(decryptedMsgs);
     } catch (err) {
@@ -426,6 +456,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('📤 handleSendMessage called:', { isDm, isEncryptionReady, messageText: newMessage.trim() });
     if ((!newMessage.trim() && attachedFiles.length === 0) || isSending) return;
 
     const fileIds = attachedFiles.map((f) => f.uuid);
@@ -435,12 +466,15 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     let isEncrypted = false;
     
     if (isDm && isEncryptionReady) {
-      const encrypted = encryptMessage(chatId, messageText);
+      console.log('📝 DM encryption check:', { isDm, isEncryptionReady, chatId, messageText });
+      const encrypted = await encryptMessage(chatId, messageText);
+      console.log('📝 Encryption result:', { encrypted: !!encrypted });
       if (encrypted) {
         contentToSend = encrypted;
         isEncrypted = true;
       }
-    } else if (isDm && isEncryptionPending) {
+    } else if (isDm) {
+      console.log('📝 Not encrypting:', { isDm, isEncryptionReady });
       toast({ 
         title: 'Ожидание шифрования', 
         description: 'Отправка открытым текстом до получения первого сообщения',

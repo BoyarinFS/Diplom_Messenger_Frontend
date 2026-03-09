@@ -54,23 +54,33 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     setError(null);
 
+    console.log('🔑 Starting encryption keys initialization...');
+
     try {
       // 1. Получаем зашифрованные ключи из IndexedDB
+      console.log('📥 Fetching encrypted keys from storage...');
       const encryptedKeys = await keyStorage.getEncryptedKeys();
       if (!encryptedKeys) {
+        console.error('❌ No encrypted keys found in storage');
         throw new Error('No encrypted keys found. Please register or login again.');
       }
+      console.log('✅ Encrypted keys found in storage');
 
       // 2. Расшифровываем ключи паролем
+      console.log('🔓 Decrypting keys with password...');
       const decryptedBundle = await signalProtocol.decryptPrivateKeys(encryptedKeys, password);
+      console.log('✅ Keys decrypted successfully');
       
       // 3. Сохраняем в память (НЕ в localStorage!)
+      console.log('💾 Saving decrypted keys to memory...');
       setKeyBundle(decryptedBundle);
       setIsInitialized(true);
+      console.log('✅ Encryption keys fully initialized');
       
       return true;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize encryption keys';
+      console.error('❌ Failed to initialize encryption keys:', errorMessage);
       setError(errorMessage);
       setKeyBundle(null);
       setIsInitialized(false);

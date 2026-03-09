@@ -17,6 +17,7 @@ export default function Home() {
   const { user, isLoading, logout } = useAuth();
   const [selectedChatId, setSelectedChatId] = useState<string | undefined>();
   const [selectedChatName, setSelectedChatName] = useState<string>('');
+  const [selectedChatIsDm, setSelectedChatIsDm] = useState<boolean>(false);
   const [showNewChatDialog, setShowNewChatDialog] = useState(false);
   const [showChatList, setShowChatList] = useState(true);
   const [mounted, setMounted] = useState(false);
@@ -43,9 +44,12 @@ export default function Home() {
 
 
 
-  const handleChatSelect = (chatId: string, chatName?: string) => {
+  const handleChatSelect = (chatId: string, chatName?: string, isDm?: boolean) => {
+    console.log('🎯 handleChatSelect called:', { chatId, chatName, isDm });
     setSelectedChatId(chatId);
     setSelectedChatName(chatName || 'Chat');
+    // Since all chats are DM (no isDm flag from backend), always set to true
+    setSelectedChatIsDm(true);
     setShowChatList(false);
   };
 
@@ -77,9 +81,9 @@ export default function Home() {
           }`}
         >
           <ChatList
-            onChatSelect={(chatId: string) => {
+            onChatSelect={(chatId: string, chatName?: string, isDm?: boolean) => {
               // In a real app, you'd fetch chat details here
-              handleChatSelect(chatId, 'Chat Name');
+              handleChatSelect(chatId, chatName || 'Chat', isDm);
             }}
             selectedChatId={selectedChatId}
             onNewChat={() => setShowNewChatDialog(true)}
@@ -94,6 +98,7 @@ export default function Home() {
             <ChatWindow
               chatId={selectedChatId}
               chatName={selectedChatName}
+              isDm={selectedChatIsDm}
               onBack={handleBack}
             />
           ) : (

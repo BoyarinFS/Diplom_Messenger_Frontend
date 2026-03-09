@@ -149,14 +149,8 @@ export class X3DH {
    * SHA-256 hash
    */
   private static hash(data: Uint8Array): Uint8Array {
-    // Note: In browser environment, use crypto.subtle.digest
-    // This is a placeholder - in real implementation use:
-    // const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    // return new Uint8Array(hashBuffer);
-    
-    // For now, return first 32 bytes as placeholder
-    // TODO: Implement proper SHA-256 using crypto.subtle
-    return data.slice(0, 32);
+    // Use nacl.hash for proper hashing
+    return nacl.hash(data).slice(0, 32);
   }
 
   static base64ToArray(base64: string): Uint8Array {

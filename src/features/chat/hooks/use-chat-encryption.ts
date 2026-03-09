@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { X3DH, DoubleRatchet, keyStorage } from '@/shared/lib/encryption';
+import nacl from 'tweetnacl';
+import { X3DH, DoubleRatchet } from '@/shared/lib/encryption';
 import { useEncryption } from '@/features/auth/providers/encryption-context';
-import type { CreateDmResponse, GetDmKeysResponse } from '@/shared/types';
-import type { RatchetSession } from '@/shared/lib/encryption/double-ratchet';
+import { api } from '@/shared/api';
+import type { CreateDmResponse, GetDmKeysResponse, ReceiverKeys } from '@/shared/types';
 
 interface ChatEncryptionState {
   isInitialized: boolean;
@@ -12,47 +13,21 @@ interface ChatEncryptionState {
   error: string | null;
 }
 
-interface PendingSession {
-  chatId: string;
-  recipientKeys: ReturnType<typeof X3DH.parseRecipientKeys>;
-  isCreator: boolean;
-  createdAt: number;
-}
-
-// Сериализуемое состояние сессии для сохранения в IndexedDB
-interface SerializedSession {
-  chatId: string;
-  rootKey: string; // base64
-  sendingChainKey: string | null; // base64
-  receivingChainKey: string | null; // base64
-  sendingMessageNumber: number;
-  receivingMessageNumber: number;
-  theirIdentityKey: string; // base64
-  theirCurrentEphemeralKey: string | null; // base64
-  ourEphemeralPublicKey: string | null; // base64
-  ourEphemeralPrivateKey: string | null; // base64
-  createdAt: number;
-  lastUsedAt: number;
-}
-
-// Вспомогательная функция для конвертации Uint8Array в base64
-function arrayToBase64(array: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < array.byteLength; i++) {
-    binary += String.fromCharCode(array[i]);
-  }
-  return btoa(binary);
-}
-
-// Вспомогательная функция для конвертации base64 в Uint8Array
-function base64ToArray(base64: string): Uint8Array {
-  const binary = atob(base64);
-  return new Uint8Array([...binary].map(c => c.charCodeAt(0)));
-}
+// Кеш для хранения ratchet сессий в памяти (не в storage)
+const ratchetSessions = new Map<string, {
+  ratchet: DoubleRatchet;
+  recipientKeys: {
+    identityKey: Uint8Array;
+    signedPreKey: Uint8Array;
+    oneTimePreKey?: Uint8Array;
+  };
+  ourEphemeralKeyPair: { publicKey: Uint8Array; privateKey: Uint8Array };
+}>();
 
 /**
  * Hook для управления шифрованием в чате
- * Использует расшифрованные ключи из EncryptionContext
+ * Упрощённая версия - без зависимости от storage сессий
+ * При каждой отправке получаем ключи и создаём сессию заново
  */
 export function useChatEncryption() {
   const { keyBundle, hasKeys } = useEncryption();
@@ -62,72 +37,56 @@ export function useChatEncryption() {
     error: null,
   });
 
-  // Храним активные сессии шифрования по chatId
-  const sessionsRef = useRef<Map<string, RatchetSession>>(new Map());
-  // Храним pending сессии (для Bob до получения первого сообщения)
-  const pendingSessionsRef = useRef<Map<string, PendingSession>>(new Map());
-
-  // Инициализация: загружаем сессии из IndexedDB при загрузке ключей
+  // При загрузке просто проверяем наличие ключей
   useEffect(() => {
-    if (!hasKeys() || !keyBundle) return;
-
-    const loadSessions = async () => {
-      try {
-        // Загружаем все сессии из IndexedDB
-        console.log('📂 Sessions loaded from IndexedDB');
-      } catch (err) {
-        console.error('Failed to load sessions:', err);
-      }
-    };
-
-    loadSessions();
-  }, [keyBundle, hasKeys]);
-
-  /**
-   * Сохраняет сессию в IndexedDB
-   */
-  const saveSessionToStorage = useCallback(async (session: RatchetSession): Promise<void> => {
-    try {
-      const serialized: SerializedSession = {
-        chatId: session.chatId,
-        rootKey: '',
-        sendingChainKey: null,
-        receivingChainKey: null,
-        sendingMessageNumber: session.ratchet.getSendingMessageNumber(),
-        receivingMessageNumber: session.ratchet.getReceivingMessageNumber(),
-        theirIdentityKey: arrayToBase64(session.theirIdentityKey),
-        theirCurrentEphemeralKey: session.theirCurrentEphemeralKey 
-          ? arrayToBase64(session.theirCurrentEphemeralKey) 
-          : null,
-        ourEphemeralPublicKey: session.ourEphemeralKeyPair 
-          ? arrayToBase64(session.ourEphemeralKeyPair.publicKey) 
-          : null,
-        ourEphemeralPrivateKey: session.ourEphemeralKeyPair 
-          ? arrayToBase64(session.ourEphemeralKeyPair.privateKey) 
-          : null,
-        createdAt: session.createdAt,
-        lastUsedAt: session.lastUsedAt,
-      };
-
-      const key = `session_${session.chatId}`;
-      localStorage.setItem(key, JSON.stringify(serialized));
-      console.log('💾 Session saved to storage:', session.chatId);
-    } catch (err) {
-      console.error('Failed to save session:', err);
+    if (hasKeys() && keyBundle) {
+      setState({
+        isInitialized: true,
+        isLoading: false,
+        error: null,
+      });
     }
-  }, []);
+  }, [hasKeys, keyBundle]);
 
   /**
-   * Загружает сессию из storage
+   * Создаёт ratchet сессию из ключей получателя
    */
-  const loadSessionFromStorage = useCallback((chatId: string): SerializedSession | null => {
+  const createSession = useCallback((
+    recipientKeys: ReturnType<typeof X3DH.parseRecipientKeys>,
+    identityPrivateKey: Uint8Array
+  ): { ratchet: DoubleRatchet; ephemeralKeyPair: { publicKey: Uint8Array; privateKey: Uint8Array } } | null => {
     try {
-      const key = `session_${chatId}`;
-      const data = localStorage.getItem(key);
-      if (!data) return null;
-      return JSON.parse(data) as SerializedSession;
+      // Генерируем эфемерную пару ключей
+      const ephemeralKeyPair = X3DH.generateEphemeralKeyPair();
+
+      // Вычисляем общий секрет по формуле X3DH
+      // DH1: наш identity private * их signed pre-key
+      const dh1 = nacl.scalarMult(identityPrivateKey, recipientKeys.signedPreKey);
+      // DH2: наш ephemeral private * их identity key  
+      const dh2 = nacl.scalarMult(ephemeralKeyPair.privateKey, recipientKeys.identityKey);
+      // DH3: наш ephemeral private * их signed pre-key
+      const dh3 = nacl.scalarMult(ephemeralKeyPair.privateKey, recipientKeys.signedPreKey);
+      // DH4: наш ephemeral private * их one-time pre-key (если есть)
+      let dh4: Uint8Array | null = null;
+      if (recipientKeys.oneTimePreKey) {
+        dh4 = nacl.scalarMult(ephemeralKeyPair.privateKey, recipientKeys.oneTimePreKey);
+      }
+
+      // Объединяем все DH результаты
+      const combinedInput = dh4
+        ? new Uint8Array([...dh1, ...dh2, ...dh3, ...dh4])
+        : new Uint8Array([...dh1, ...dh2, ...dh3]);
+      const sharedSecret = nacl.hash(combinedInput).slice(0, 32);
+
+      // Создаём Double Ratchet
+      const ratchet = new DoubleRatchet(sharedSecret);
+      
+      // Инициализируем ratchet для отправки
+      ratchet.initSender(ephemeralKeyPair.privateKey, recipientKeys.signedPreKey);
+
+      return { ratchet, ephemeralKeyPair };
     } catch (err) {
-      console.error('Failed to load session:', err);
+      console.error('❌ Error creating session:', err);
       return null;
     }
   }, []);
@@ -137,9 +96,15 @@ export function useChatEncryption() {
    */
   const initializeDmEncryption = useCallback(async (
     dmData: CreateDmResponse | GetDmKeysResponse,
-    isCreator: boolean
+    isCreator: boolean,
+    skipKeyFetch: boolean = false
   ): Promise<boolean> => {
-    console.log('🔧 initializeDmEncryption called with:', { isCreator, hasReceiverKeys: !!dmData.receiverKeys });
+    console.log('🔧 initializeDmEncryption called:', { 
+      isCreator, 
+      hasReceiverKeys: !!dmData.receiverKeys,
+      skipKeyFetch,
+      chatId: dmData.chat.uuid 
+    });
     
     if (!hasKeys() || !keyBundle) {
       console.error('❌ Encryption keys NOT initialized!');
@@ -151,182 +116,153 @@ export function useChatEncryption() {
       return false;
     }
 
-    setState(prev => ({ ...prev, isLoading: true, error: null }));
-
     try {
+      // Парсим ключи получателя
       const recipientKeys = X3DH.parseRecipientKeys(dmData.receiverKeys);
-
-      if (isCreator) {
-        // Мы создали чат (Alice)
-        const ephemeralKeyPair = X3DH.generateEphemeralKeyPair();
-        const sharedSecret = X3DH.aliceCalculateSecret(
-          keyBundle.identityPrivateKey,
-          ephemeralKeyPair.privateKey,
-          recipientKeys.identityKey,
-          recipientKeys.signedPreKey,
-          recipientKeys.oneTimePreKey
-        );
-
-        // Создаём Double Ratchet сессию
-        const ratchet = new DoubleRatchet(sharedSecret);
-        
-        // Инициализируем как отправитель
-        ratchet.initSender(ephemeralKeyPair.privateKey, recipientKeys.signedPreKey);
-        
-        // Инициализируем как получатель
-        ratchet.initReceiver(keyBundle.signedPreKeyPrivate, ephemeralKeyPair.publicKey);
-
-        const session: RatchetSession = {
-          chatId: dmData.chat.uuid,
-          ratchet,
-          theirIdentityKey: recipientKeys.identityKey,
-          ourEphemeralKeyPair: ephemeralKeyPair,
-          createdAt: Date.now(),
-          lastUsedAt: Date.now(),
-        };
-
-        sessionsRef.current.set(dmData.chat.uuid, session);
-        await saveSessionToStorage(session);
-      } else {
-        // Мы получили чат (Bob)
-        const pendingSession: PendingSession = {
-          chatId: dmData.chat.uuid,
-          recipientKeys,
-          isCreator: false,
-          createdAt: Date.now(),
-        };
-        pendingSessionsRef.current.set(dmData.chat.uuid, pendingSession);
+      
+      // Создаём сессию
+      const session = createSession(recipientKeys, keyBundle.identityPrivateKey);
+      
+      if (!session) {
+        throw new Error('Failed to create encryption session');
       }
 
-      setState({
+      // Сохраняем в кеш
+      ratchetSessions.set(dmData.chat.uuid, {
+        ratchet: session.ratchet,
+        recipientKeys,
+        ourEphemeralKeyPair: session.ephemeralKeyPair,
+      });
+
+      console.log('✅ Encryption session created:', dmData.chat.uuid);
+
+      setState(prev => ({
+        ...prev,
         isInitialized: true,
         isLoading: false,
         error: null,
-      });
+      }));
 
       return true;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to initialize encryption';
-      setState({
+      console.error('❌ Encryption init error:', err);
+      setState(prev => ({
+        ...prev,
         isInitialized: false,
         isLoading: false,
         error: errorMessage,
-      });
+      }));
       return false;
     }
-  }, [keyBundle, hasKeys, saveSessionToStorage]);
+  }, [keyBundle, hasKeys, createSession]);
 
   /**
-   * Завершает инициализацию сессии для Bob
+   * Создаёт сессию для расшифровки (Bob)
    */
-  const completeBobSession = useCallback((
-    chatId: string,
-    ephemeralPublicKeyBase64: string
-  ): boolean => {
-    const pending = pendingSessionsRef.current.get(chatId);
-    if (!pending || !keyBundle) {
-      return false;
+  const createDecryptionSession = useCallback((
+    senderIdentityKey: Uint8Array,
+    senderEphemeralPublicKey: Uint8Array
+  ): DoubleRatchet | null => {
+    if (!keyBundle) {
+      console.error('❌ No key bundle for decryption');
+      return null;
     }
 
     try {
-      const ephemeralPublicKey = X3DH.base64ToArray(ephemeralPublicKeyBase64);
-      const senderIdentityKey = pending.recipientKeys.identityKey;
-      const sharedSecret = X3DH.bobCalculateSecret(
-        keyBundle.identityPrivateKey,
-        keyBundle.signedPreKeyPrivate,
-        pending.recipientKeys.oneTimePreKey || null,
-        senderIdentityKey,
-        ephemeralPublicKey
-      );
+      // Bob вычисляет общий секрет используя свои приватные ключи
+      // DH1: наш signed pre-key private * их identity key
+      const dh1 = nacl.scalarMult(keyBundle.signedPreKeyPrivate, senderIdentityKey);
+      // DH2: наш identity private * их ephemeral public
+      const dh2 = nacl.scalarMult(keyBundle.identityPrivateKey, senderEphemeralPublicKey);
+      // DH3: наш signed pre-key private * их ephemeral public
+      const dh3 = nacl.scalarMult(keyBundle.signedPreKeyPrivate, senderEphemeralPublicKey);
+
+      const combinedInput = new Uint8Array([...dh1, ...dh2, ...dh3]);
+      const sharedSecret = nacl.hash(combinedInput).slice(0, 32);
 
       const ratchet = new DoubleRatchet(sharedSecret);
-      const signedPreKeyPublic = X3DH.generateEphemeralKeyPair().publicKey;
-      ratchet.initReceiver(ephemeralPublicKey, signedPreKeyPublic);
+      ratchet.initReceiver(keyBundle.signedPreKeyPrivate, senderEphemeralPublicKey);
 
-      const session: RatchetSession = {
-        chatId,
-        ratchet,
-        theirIdentityKey: pending.recipientKeys.identityKey,
-        ourEphemeralKeyPair: undefined,
-        createdAt: Date.now(),
-        lastUsedAt: Date.now(),
-      };
-
-      sessionsRef.current.set(chatId, session);
-      pendingSessionsRef.current.delete(chatId);
-
-      return true;
+      return ratchet;
     } catch (err) {
-      return false;
+      console.error('❌ Error creating decryption session:', err);
+      return null;
     }
   }, [keyBundle]);
 
   /**
    * Шифрует сообщение
    */
-  const encryptMessage = useCallback((chatId: string, plaintext: string): string | null => {
-    const session = sessionsRef.current.get(chatId);
-    if (!session) {
-      const pending = pendingSessionsRef.current.get(chatId);
-      if (pending) {
-        return null;
-      }
+  const encryptMessage = useCallback(async (chatId: string, plaintext: string): Promise<string | null> => {
+    console.log('🔒 encryptMessage called:', { chatId, plaintextLength: plaintext?.length });
+
+    if (!keyBundle) {
+      console.error('❌ No key bundle for encryption');
       return null;
     }
 
     try {
-      const encrypted = session.ratchet.encrypt(plaintext);
-      session.lastUsedAt = Date.now();
-      
-      const result: any = { ...encrypted };
-      if (session.ourEphemeralKeyPair) {
-        const bytes = session.ourEphemeralKeyPair.publicKey;
-        let binary = '';
-        for (let i = 0; i < bytes.byteLength; i++) {
-          binary += String.fromCharCode(bytes[i]);
+      // Пробуем получить сессию из кеша
+      let sessionData = ratchetSessions.get(chatId);
+
+      // Если нет сессии - получаем ключи и создаём
+      if (!sessionData) {
+        console.log('🔒 No session in cache, fetching recipient keys...');
+        
+        // Получаем ключи получателя
+        const dmKeys = await api.getDmKeys(chatId);
+        if (!dmKeys?.receiverKeys) {
+          console.error('❌ No recipient keys found');
+          return null;
         }
-        result.ephemeralPublicKey = btoa(binary);
+
+        const recipientKeys = X3DH.parseRecipientKeys(dmKeys.receiverKeys);
+        const session = createSession(recipientKeys, keyBundle.identityPrivateKey);
+        
+        if (!session) {
+          console.error('❌ Failed to create session');
+          return null;
+        }
+
+        sessionData = {
+          ratchet: session.ratchet,
+          recipientKeys,
+          ourEphemeralKeyPair: session.ephemeralKeyPair,
+        };
+        
+        ratchetSessions.set(chatId, sessionData);
       }
 
+      // Шифруем сообщение
+      const encrypted = sessionData.ratchet.encrypt(plaintext);
+      
+      // Формируем результат с эфемерным публичным ключом
+      const result = {
+        ...encrypted,
+        ephemeralPublicKey: arrayToBase64(sessionData.ourEphemeralKeyPair.publicKey),
+      };
+
+      console.log('🔒 Encryption successful, result length:', JSON.stringify(result).length);
       return JSON.stringify(result);
     } catch (err) {
+      console.error('❌ Encryption error:', err);
       return null;
     }
-  }, []);
+  }, [keyBundle, createSession]);
 
   /**
    * Дешифрует полученное сообщение
    */
-  const decryptMessage = useCallback((chatId: string, encryptedData: string): string | null => {
+  const decryptMessage = useCallback(async (chatId: string, encryptedData: string): Promise<string | null> => {
     console.log('🔓 decryptMessage called:', { chatId, encryptedDataLength: encryptedData?.length });
-    console.log('🔓 Sessions:', Array.from(sessionsRef.current.keys()));
     
-    const pending = pendingSessionsRef.current.get(chatId);
-    if (pending) {
-      console.log('🔓 Found pending session');
-      try {
-        const data = JSON.parse(encryptedData);
-        if (data.ephemeralPublicKey) {
-          const completed = completeBobSession(chatId, data.ephemeralPublicKey);
-          console.log('🔓 Bob session completed:', completed);
-          if (!completed) {
-            return null;
-          }
-        }
-      } catch (e) {
-        console.error('🔓 Error parsing:', e);
-        return null;
-      }
-    }
-
-    const session = sessionsRef.current.get(chatId);
-    if (!session) {
-      console.log('🔓 No session found');
+    if (!keyBundle) {
+      console.error('❌ No key bundle for decryption');
       return null;
     }
 
     try {
-      console.log('🔓 Attempting to decrypt...');
       const encrypted = JSON.parse(encryptedData) as {
         ciphertext: string;
         iv: string;
@@ -335,48 +271,111 @@ export function useChatEncryption() {
         ephemeralPublicKey?: string;
       };
       
-      const { ephemeralPublicKey, ...encryptedPayload } = encrypted;
+      if (!encrypted.ephemeralPublicKey) {
+        console.error('❌ No ephemeral public key in message');
+        return null;
+      }
+
+      // Пробуем найти сессию в кеше
+      let sessionData = ratchetSessions.get(chatId);
+
+      if (sessionData) {
+        // Пробуем расшифровать с существующей сессией
+        try {
+          const { ephemeralPublicKey, ...encryptedPayload } = encrypted;
+          const decrypted = sessionData.ratchet.decrypt(encryptedPayload as any);
+          console.log('🔓 Decryption successful with cached session');
+          return decrypted;
+        } catch (e) {
+          console.log('🔓 Cached session failed, trying to create new one');
+        }
+      }
+
+      // Создаём новую сессию для расшифровки
+      console.log('🔓 Creating new decryption session...');
       
-      const decrypted = session.ratchet.decrypt(encryptedPayload as any);
-      session.lastUsedAt = Date.now();
-      
-      console.log('🔓 Decryption successful:', decrypted);
-      return decrypted;
+      // Нам нужен identity key отправителя - получаем его из API
+      try {
+        const dmKeys = await api.getDmKeys(chatId);
+        if (!dmKeys?.receiverKeys) {
+          console.error('❌ No keys found for decryption');
+          return null;
+        }
+
+        // Используем identity key получателя (который является отправителем для нас)
+        const senderIdentityKey = X3DH.base64ToArray(dmKeys.receiverKeys.identityPublicKey);
+        const senderEphemeralKey = X3DH.base64ToArray(encrypted.ephemeralPublicKey);
+
+        const ratchet = createDecryptionSession(senderIdentityKey, senderEphemeralKey);
+        
+        if (!ratchet) {
+          console.error('❌ Failed to create decryption session');
+          return null;
+        }
+
+        // Расшифровываем
+        const { ephemeralPublicKey, ...encryptedPayload } = encrypted;
+        const decrypted = ratchet.decrypt(encryptedPayload as any);
+        
+        console.log('🔓 Decryption successful with new session');
+        return decrypted;
+      } catch (err) {
+        console.error('❌ Decryption error:', err);
+        return null;
+      }
     } catch (err) {
-      console.error('🔓 Decryption error:', err);
+      console.error('❌ Decryption error:', err);
       return null;
     }
-  }, [completeBobSession]);
+  }, [keyBundle, createDecryptionSession]);
 
   /**
    * Проверяет, инициализировано ли шифрование для чата
    */
   const isChatEncrypted = useCallback((chatId: string): boolean => {
-    return sessionsRef.current.has(chatId);
+    return ratchetSessions.has(chatId);
   }, []);
 
   /**
    * Проверяет, есть ли pending сессия
    */
   const isPendingSession = useCallback((chatId: string): boolean => {
-    return pendingSessionsRef.current.has(chatId);
+    return false; // Упрощённая версия - нет pending сессий
+  }, []);
+
+  /**
+   * Проверяет, есть ли сохранённая сессия в storage
+   */
+  const hasStoredSession = useCallback((chatId: string): boolean => {
+    return ratchetSessions.has(chatId);
   }, []);
 
   /**
    * Удаляет сессию
    */
   const clearSession = useCallback((chatId: string): void => {
-    sessionsRef.current.delete(chatId);
+    ratchetSessions.delete(chatId);
   }, []);
 
   return {
     ...state,
     initializeDmEncryption,
-    completeBobSession,
     encryptMessage,
     decryptMessage,
     isChatEncrypted,
     isPendingSession,
+    hasStoredSession,
     clearSession,
+    sessionsLoaded: true,
   };
 }
+
+// Вспомогательная функция для конвертации Uint8Array в base64
+function arrayToBase64(array: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < array.byteLength; i++) {
+    binary += String.fromCharCode(array[i]);
+  }
+  return btoa(binary);
+}
+

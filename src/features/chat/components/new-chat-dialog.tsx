@@ -84,7 +84,7 @@ export function NewChatDialog({
         throw new Error('User not authenticated');
       }
 
-      // 1. Создаём DM чат
+      // 1. Создаём DM чат - ответ уже содержит ключи получателя
       const response = await api.createDmChat({
         authorUsername: currentUser.username,
         receiverUsername: recipientAccount.username,
@@ -92,14 +92,18 @@ export function NewChatDialog({
       });
 
       console.log('✅ DM Chat created:', response);
+      console.log('🔑 Receiver keys in response:', !!response.receiverKeys);
 
-      // 2. Получаем ключи собеседника
-      const dmKeys = await api.getDmKeys(response.chat.uuid);
-      console.log('🔑 DM Keys received:', dmKeys);
+      // Проверяем, есть ли ключи в ответе
+      if (!response.receiverKeys) {
+        console.error('❌ No receiver keys in response!');
+        alert('Failed to get encryption keys. Please try again.');
+        return;
+      }
 
-      // 3. Инициализируем шифрование
+      // 2. Инициализируем шифрование с ключами из ответа сервера
       // Используем isCreator из ответа сервера, чтобы определить роль (Alice/Bob)
-      const encryptionInitialized = await initializeDmEncryption(dmKeys, response.isCreator);
+      const encryptionInitialized = await initializeDmEncryption(response, response.isCreator);
       
       if (encryptionInitialized) {
         console.log(`✅ Encryption initialized for DM chat (${response.isCreator ? 'Alice - creator' : 'Bob - receiver'})`);
