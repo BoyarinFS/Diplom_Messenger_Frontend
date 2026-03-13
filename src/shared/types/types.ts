@@ -18,10 +18,11 @@ export interface RegistrationRequest {
   lastname: string;
 }
 
-// Encryption Types
 
 export interface AccountKeysResponse {
+  identityPublicKey: string;
   identityPrivateKey: string;
+  signedPreKeyPublic: string;
   signedPreKeyPrivate: string;
 }
 
@@ -177,7 +178,6 @@ export interface ResendVerificationRequest {
   email: string;
 }
 
-// Encryption Types
 
 export interface ReceiverKeys {
   identityPublicKey: string;
@@ -185,9 +185,6 @@ export interface ReceiverKeys {
   signedPreKeySignature: string;
   oneTimePreKey?: string;
 }
-
-// File Management Types
-
 
 export type AttachmentType = 'MESSAGE' | 'PROFILE' | 'CHAT';
 

@@ -28,7 +28,7 @@ function MessageComponent({
   onReply,
   onThread,
 }: MessageProps) {
-  const msgWithAttachments = message as MessageType & { attachments?: FileMetadata[]; status?: string };
+  const msgWithAttachments = message as MessageType & { attachments?: FileMetadata[]; files?: FileMetadata[]; status?: string };
   const attachments = msgWithAttachments.attachments || msgWithAttachments.files || [];
   const hasAttachments = attachments.length > 0;
   const hasText = message.text?.trim().length > 0;

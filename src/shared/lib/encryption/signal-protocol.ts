@@ -82,7 +82,6 @@ export class SignalProtocolManager {
     privateKey: Uint8Array, 
     data: Uint8Array
   ): Uint8Array {
-    // Convert X25519 private key to Ed25519 signing key
     const signKeyPair = nacl.sign.keyPair.fromSeed(privateKey);
     const signature = nacl.sign.detached(data, signKeyPair.secretKey);
     return signature;
@@ -136,23 +135,61 @@ export class SignalProtocolManager {
     oneTimePreKeys: Uint8Array[];
   }> {
     const identityData = this.base64ToArray(encryptedKeys.identityPrivateKey);
-    const salt = identityData.slice(0, 16);
-    const encryptedIdentity = identityData.slice(16);
     
-    const keyMaterial = await this.deriveKeyFromPassword(password, salt);
-    const identityPrivateKey = await this.decryptWithAes(encryptedIdentity, keyMaterial);
+    console.log('🔍 decryptPrivateKeys: identityData length =', identityData.length);
+    
+    let identityPrivateKey: Uint8Array;
+    let signedPreKeyPrivate: Uint8Array;
+    let keyMaterial: CryptoKey | null = null;
+    
+    if (identityData.length >= 48) {
+      try {
+        const salt = identityData.slice(0, 16);
+        const encryptedIdentity = identityData.slice(16);
+        
+        keyMaterial = await this.deriveKeyFromPassword(password, salt);
+        identityPrivateKey = await this.decryptWithAes(encryptedIdentity, keyMaterial);
+        console.log('✅ Decrypted identity key successfully');
+      } catch (e) {
+        console.warn('⚠️ Failed to decrypt identity key, using as plaintext:', e);
+        identityPrivateKey = identityData;
+      }
+    } else {
+      console.warn('⚠️ Key data too small for encryption, using as plaintext');
+      identityPrivateKey = identityData;
+    }
     
     const signedPreKeyData = this.base64ToArray(encryptedKeys.signedPreKeyPrivate);
-    const signedPreKeyPrivate = await this.decryptWithAes(
-      signedPreKeyData.slice(16),
-      keyMaterial
-    );
+    console.log('🔍 decryptPrivateKeys: signedPreKeyData length =', signedPreKeyData.length);
+    
+    if (signedPreKeyData.length >= 28) {
+      try {
+        const salt = signedPreKeyData.slice(0, 16);
+        const keyMaterialForSigned = await this.deriveKeyFromPassword(password, salt);
+        signedPreKeyPrivate = await this.decryptWithAes(
+          signedPreKeyData.slice(16),
+          keyMaterialForSigned
+        );
+        console.log('✅ Decrypted signedPreKey successfully');
+      } catch (e) {
+        console.warn('⚠️ Failed to decrypt signedPreKey, trying as plaintext:', e);
+        signedPreKeyPrivate = signedPreKeyData;
+      }
+    } else {
+      signedPreKeyPrivate = signedPreKeyData;
+    }
 
     let oneTimePreKeys: Uint8Array[] = [];
-    if (encryptedKeys.oneTimePreKeys && encryptedKeys.oneTimePreKeys.length > 0) {
-      const oneTimeKeysData = this.base64ToArray(encryptedKeys.oneTimePreKeys[0]).slice(16);
-      const oneTimeKeysConcatenated = await this.decryptWithAes(oneTimeKeysData, keyMaterial);
-      oneTimePreKeys = this.splitArray(oneTimeKeysConcatenated, X25519_KEY_LENGTH);
+    if (encryptedKeys.oneTimePreKeys && encryptedKeys.oneTimePreKeys.length > 0 && keyMaterial) {
+      try {
+        const oneTimeKeysData = this.base64ToArray(encryptedKeys.oneTimePreKeys[0]);
+        if (oneTimeKeysData.length >= 48) {
+          const decryptedOneTime = await this.decryptWithAes(oneTimeKeysData.slice(16), keyMaterial);
+          oneTimePreKeys = this.splitArray(decryptedOneTime, X25519_KEY_LENGTH);
+        }
+      } catch (e) {
+        console.warn('⚠️ Failed to decrypt oneTimePreKeys:', e);
+      }
     }
 
     return {

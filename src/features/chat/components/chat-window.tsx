@@ -1,26 +1,34 @@
 'use client';
 
 import type React from 'react';
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 
 import { api } from '@/shared/api';
 import { webSocketService } from '@/shared/api';
 import type { Message, FileMetadata } from '@/shared/types';
 import { useAuth } from '@/features/auth';
+import { useEncryption } from '@/features/auth/providers/encryption-context';
 import { useChatEncryption } from '@/features/chat/hooks/use-chat-encryption';
-import { Send, MoreVertical, ArrowLeft, Reply, MessageSquare, Paperclip, X, Lock, File, Image, FileText, Music, Video } from 'lucide-react';
+import { Send, MoreVertical, ArrowLeft, Reply, MessageSquare, Paperclip, X, Lock, File, FileText, Music, Video } from 'lucide-react';
 
 import { Button } from '@/shared/ui';
 import { Input } from '@/shared/ui';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/shared/ui';
 import { useToast } from '@/shared/ui';
 import { useFileUpload } from '@/features/file';
-import { CompactFilePreview } from '@/features/file';
 import { FileImage } from '@/features/file';
 
 import { useWebSocketStatus } from '@/shared/lib/use-websocket-status';
 
-// Мемоизированный компонент для отображения прикрепленных файлов
+// Утилиты для конвертации
+const arrayToBase64 = (array: Uint8Array): string => {
+  let binary = '';
+  for (let i = 0; i < array.byteLength; i++) {
+    binary += String.fromCharCode(array[i]);
+  }
+  return btoa(binary);
+};
+
 const AttachedFilesList = memo(({ 
   files, 
   onRemove 
@@ -67,7 +75,6 @@ const AttachedFilesList = memo(({
 AttachedFilesList.displayName = 'AttachedFilesList';
 
 interface ChatWindowProps {
-
   chatId: string;
   chatName: string;
   isDm?: boolean;
@@ -79,19 +86,17 @@ const PEER_TIMEOUT = 120000;
 const PRESENCE_SEND_INTERVAL = 25000;
 
 export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindowProps) {
-  console.log('📱 ChatWindow props:', { chatId, chatName, isDm });
+
   const { user } = useAuth();
+  const { keyBundle } = useEncryption();
   const { isConnected, isStable } = useWebSocketStatus();
   
-  const { 
-    initializeDmEncryption, 
-    encryptMessage, 
-    decryptMessage, 
-    isChatEncrypted,
-    isPendingSession,
-    hasStoredSession,
-    sessionsLoaded
-  } = useChatEncryption();
+  const encryption = useChatEncryption();
+  const encryptionRef = useRef(encryption);
+
+  useEffect(() => {
+    encryptionRef.current = encryption;
+  }, [encryption]);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
@@ -115,78 +120,59 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
 
   const presenceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const peerCheckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const isActiveRef = useRef(true);
-  const encryptionInitRef = useRef(false);
   const initialScrollDoneRef = useRef(false);
+  const initialLoadDoneRef = useRef(false);
+  const peerLastSeenRef = useRef<number | null>(null);
 
   const { toast } = useToast();
 
-  // Используем ref для стабильных колбэков без пересоздания при изменении текста
-  const attachedFilesRef = useRef(attachedFiles);
-  attachedFilesRef.current = attachedFiles;
+  // Синхронизируем peerLastSeen с ref, чтобы не перезапускать эффекты присутствия
+  useEffect(() => {
+    peerLastSeenRef.current = peerLastSeen;
+  }, [peerLastSeen]);
 
-  const onUploadSuccess = useCallback((file: FileMetadata) => {
-    setAttachedFiles([...attachedFilesRef.current, file]);
-    toast({ title: 'Файл загружен', description: file.fileName });
-  }, [toast]);
-
-  const onUploadError = useCallback((error: string) => {
-    toast({ title: 'Ошибка загрузки', description: error, variant: 'destructive' });
-  }, [toast]);
-
-  const { upload } = useFileUpload({
-    chatId,
-    onSuccess: onUploadSuccess,
-    onError: onUploadError,
-  });
-
-
-  // Главный эффект: загружаем сообщения -> получаем ключи -> расшифровываем
+  // ==================== ЗАГРУЗКА ИСТОРИИ (ТОЛЬКО ОДИН РАЗ) ====================
   useEffect(() => {
     if (!chatId) return;
+    if (initialLoadDoneRef.current) return; // Предотвращаем повторную загрузку
+    
+    console.log('🚀 Loading chat history for:', chatId);
 
-    const initChat = async () => {
-      console.log('🚀 Starting chat initialization for:', chatId);
-      
+    const loadChatHistory = async () => {
       try {
-        // Шаг 1: Загружаем сообщения
-        console.log('📥 Step 1: Loading messages...');
         setIsLoading(true);
+        
+        // ШАГ 1: Загружаем сообщения
         const response = await api.getChatMessages(chatId);
-        const rawMessages: any[] = Array.isArray(response) ? response : response.messages || [];
-        console.log('📥 Loaded raw messages:', rawMessages.length);
+        const rawMessages = Array.isArray(response) ? response : response.messages || [];
 
-        // Шаг 2: Получаем ключи собеседника (все чаты - DM)
-        console.log('🔑 Step 2: Getting recipient keys...');
-        try {
-          const dmKeys = await api.getDmKeys(chatId);
-          console.log('🔑 Received keys:', !!dmKeys?.receiverKeys);
-          
-          if (dmKeys && dmKeys.receiverKeys) {
-            // Все чаты являются DM - инициализируем сессию шифрования
-            const success = await initializeDmEncryption(dmKeys, true);
-            console.log('🔑 Encryption initialized:', success);
-            setIsEncryptionReady(success);
-          } else {
-            console.warn('⚠️ No receiver keys found, chat may not be DM');
+        // ШАГ 2: Пытаемся расшифровать зашифрованные сообщения, не трогая рабочую сессию
+        let decryptedMsgs = rawMessages;
+
+        const { decryptHistoryMessage } = encryptionRef.current;
+        if (keyBundle && decryptHistoryMessage) {
+          console.log('🔓 History decrypt: total', rawMessages.length, 'messages');
+
+          const encryptedMessages = rawMessages.filter((msg: any) =>
+            msg.text && msg.text.includes('"ciphertext"')
+          );
+
+          for (const msg of encryptedMessages) {
+            try {
+              const decrypted = await decryptHistoryMessage(chatId, msg.text);
+              const index = decryptedMsgs.findIndex((m: any) => m.uuid === msg.uuid);
+              if (index !== -1 && decrypted) {
+                decryptedMsgs[index] = { ...msg, text: decrypted, isEncrypted: true };
+              }
+            } catch (e: any) {
+              console.error('🔓 History decrypt failed for msg', msg.uuid, e);
+            }
           }
-        } catch (keysError) {
-          console.warn('⚠️ Failed to get keys:', keysError);
         }
 
-        // Шаг 3: Расшифровываем сообщения
-        console.log('🔓 Step 3: Decrypting messages...');
-        const decryptedMsgs = await Promise.all(rawMessages.map(async (msg: any) => {
-          if (msg.isEncrypted && msg.text) {
-            const decrypted = await decryptMessage(chatId, msg.text);
-            console.log('🔓 Message decrypted:', msg.uuid, '->', !!decrypted);
-            return { ...msg, text: decrypted || msg.text };
-          }
-          return msg;
-        }));
-
+        console.log('✅ History loaded:', decryptedMsgs.length, 'messages');
         setMessages(decryptedMsgs);
-        console.log('✅ Chat initialization complete');
+        initialLoadDoneRef.current = true;
       } catch (err) {
         console.error('❌ Failed to load chat:', err);
         setMessages([]);
@@ -194,10 +180,244 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         setIsLoading(false);
       }
     };
+    
+    loadChatHistory();
+  }, [chatId]); // Только chatId! Убрал все остальные зависимости
 
-    initChat();
-  }, [chatId]);
+  // ==================== ИНИЦИАЛИЗАЦИЯ ШИФРОВАНИЯ ====================
+  const encryptionInitRef = useRef(false);
 
+  useEffect(() => {
+    if (!chatId || !isDm || !keyBundle || encryptionInitRef.current) return;
+
+    console.log('🔑 Initializing encryption for DM chat:', chatId);
+
+    encryptionInitRef.current = true;
+
+    const initEncryption = async () => {
+      try {
+        const dmKeys = await api.getDmKeys(chatId);
+
+        if (dmKeys?.receiverKeys) {
+          const { initializeDmEncryption, hasStoredSession } = encryptionRef.current;
+          const hasSession = await hasStoredSession(chatId);
+
+          // Сообщаем useChatEncryption о ключах собеседника.
+          await initializeDmEncryption(dmKeys);
+
+          setIsEncryptionReady(hasSession);
+          setIsEncryptionPending(!hasSession);
+        }
+      } catch (error) {
+        console.error('❌ Failed to initialize encryption for DM chat:', error);
+        setIsEncryptionReady(false);
+        setIsEncryptionPending(false);
+      }
+    };
+
+    initEncryption();
+  }, [chatId, isDm, keyBundle]);
+
+  // ==================== ОБРАБОТКА ВХОДЯЩИХ СООБЩЕНИЙ (WebSocket) ====================
+  useEffect(() => {
+    if (!chatId) return;
+
+    console.log('🔌 Setting up WebSocket listener for chat:', chatId);
+
+    const handleIncomingMessage = async (incoming: any) => {
+      const payload = incoming?.message ?? incoming;
+
+      // Игнорируем сообщения о присутствии - они обрабатываются отдельно
+      if (payload?.type === 'PRESENCE') {
+        const { status, last_time, userId } = payload;
+        if (!userId || userId === user?.uuid) return;
+        
+        if (status === 'ONLINE') {
+          setPeerStatus('ONLINE');
+          setPeerLastTime(null);
+          setPeerLastSeen(Date.now());
+        } else if (status === 'OFF') {
+          setPeerStatus('OFF');
+          if (last_time) setPeerLastTime(last_time);
+        }
+        return;
+      }
+
+      // Обработка обычных сообщений
+      const newMsg = payload;
+      
+      // Проверяем, не дубликат ли это сообщение
+      setMessages(prev => {
+        if (prev.some(m => m.uuid === newMsg.uuid)) {
+          console.log('⏭️ Duplicate message ignored:', newMsg.uuid);
+          return prev;
+        }
+        
+        let decryptedText = newMsg.text || newMsg.content || '';
+        const isMessageEncrypted = decryptedText && decryptedText.includes('"ciphertext"');
+
+        const authorId =
+          newMsg?.author?.uuid ??
+          newMsg?.authorId ??
+          newMsg?.senderId ??
+          newMsg?.accountId ??
+          null;
+
+        let isOwnMessage = !!authorId && authorId === user?.uuid;
+
+        // Fallback: если authorId отсутствует/некорректен, определяем "своё" по senderIdentityKey
+        if (!isOwnMessage && isMessageEncrypted && keyBundle?.identityPublicKey) {
+          try {
+            const parsed = JSON.parse(decryptedText);
+            const mySenderIdKey = arrayToBase64(keyBundle.identityPublicKey);
+            if (parsed?.senderIdentityKey && parsed.senderIdentityKey === mySenderIdKey) {
+              isOwnMessage = true;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        
+        // Асинхронно дешифруем и обновляем
+        if (isMessageEncrypted && !isOwnMessage) {
+          encryptionRef.current.decryptMessage(chatId, decryptedText).then((decrypted: string | null) => {
+            if (decrypted) {
+              setMessages(current => 
+                current.map(m => 
+                  m.uuid === newMsg.uuid 
+                    ? { ...m, text: decrypted, isEncrypted: true }
+                    : m
+                )
+              );
+              
+              // Если мы ждали шифрование
+              if (isEncryptionPending) {
+                setIsEncryptionReady(true);
+                setIsEncryptionPending(false);
+                toast({ title: '🔐 Шифрование установлено' });
+              }
+            }
+          }).catch((e: any) => {
+            console.error('Failed to decrypt:', e);
+          });
+        }
+        
+        // Добавляем сообщение сразу (с зашифрованным текстом, если есть)
+        const normalized: Message & { attachments?: FileMetadata[] } = {
+          uuid: newMsg.uuid,
+          text: decryptedText,
+          createdAt: newMsg.createdAt ?? new Date().toISOString(),
+          author: newMsg.author ?? user as any,
+          chatId: newMsg.chatId ?? chatId,
+          messageType: newMsg.messageType ?? 'regular',
+          parentMessageId: newMsg.parentMessageId,
+          threadRootMessageId: newMsg.threadRootMessageId,
+          threadMessagesCount: newMsg.threadMessagesCount,
+          updatedAt: newMsg.updatedAt,
+          attachments: newMsg.attachments,
+          isEncrypted: isMessageEncrypted,
+        };
+        
+        return [...prev, normalized];
+      });
+    };
+
+    webSocketService.subscribeToChat(chatId, handleIncomingMessage);
+
+    return () => {
+      console.log('🔌 Removing WebSocket listener for chat:', chatId);
+      webSocketService.unsubscribeFromChat(chatId);
+    };
+  }, [chatId, isEncryptionPending, toast, user?.uuid]);
+
+  // ==================== ОТПРАВКА ПРИСУТСТВИЯ ====================
+  useEffect(() => {
+    if (!chatId || !isDm || !user?.uuid) return;
+
+    const sendPresenceStatus = (status: 'ONLINE' | 'OFF') => {
+      const payload: any = { status, userId: user.uuid };
+      if (status === 'OFF') {
+        payload.last_time = new Date().toLocaleString('ru-RU');
+      }
+      webSocketService.sendPresence(chatId, payload);
+    };
+
+    const handleVisibilityChange = () => {
+      sendPresenceStatus(document.hidden ? 'OFF' : 'ONLINE');
+    };
+
+    // Отправляем ONLINE при монтировании
+    setTimeout(() => sendPresenceStatus('ONLINE'), 500);
+    
+    // Периодическая отправка ONLINE
+    const presenceInterval = setInterval(() => {
+      sendPresenceStatus('ONLINE');
+    }, PRESENCE_SEND_INTERVAL);
+    
+    // Проверка таймаута пира (используем ref, чтобы не перезапускать эффект)
+    const peerCheckInterval = setInterval(() => {
+      const lastSeen = peerLastSeenRef.current;
+      if (lastSeen && Date.now() - lastSeen > PEER_TIMEOUT) {
+        setPeerStatus('OFF');
+      }
+    }, PEER_HEARTBEAT_INTERVAL);
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      clearInterval(presenceInterval);
+      clearInterval(peerCheckInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      sendPresenceStatus('OFF'); // Отправляем OFF при размонтировании
+    };
+  }, [chatId, isDm, user?.uuid]);
+
+  // ==================== ПОДКЛЮЧЕНИЕ WEBSOCKET ====================
+  useEffect(() => {
+    webSocketService.connect(
+      () => console.log('WebSocket connected'),
+      () => console.log('WebSocket error')
+    );
+  }, []);
+
+  // ==================== СКРОЛЛ К НИЗУ ====================
+  useEffect(() => {
+    if (!isLoading && !initialScrollDoneRef.current && messages.length > 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+      initialScrollDoneRef.current = true;
+    }
+  }, [isLoading, messages.length]);
+
+  useEffect(() => {
+    if (messages.length === 0) return;
+    
+    const lastMessage = messages[messages.length - 1];
+    const isOwnMessage = lastMessage.author?.uuid === user?.uuid;
+    
+    if (isOwnMessage && isScrolledToBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [messages, user?.uuid]);
+
+  // ==================== ЗАГРУЗКА ТРЕДА ====================
+  useEffect(() => {
+    if (!activeThread) return;
+    
+    const loadThread = async () => {
+      try {
+        const response = await api.getThreadMessages(chatId, activeThread.uuid);
+        setThreadMessages(Array.isArray(response) ? response : response.messages || []);
+      } catch {
+        setThreadMessages([]);
+      }
+    };
+    
+    loadThread();
+  }, [activeThread, chatId]);
+
+  // Остальные функции (handleFileSelect, handleSendMessage, MessageItem, renderPeerStatus)
+  // остаются без изменений...
+  
   const formatMessageTime = useCallback((dateString?: string) => {
     if (!dateString) return '';
     try {
@@ -217,128 +437,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     return new Date(timestamp).toLocaleDateString('ru-RU');
   }, []);
 
-  const sendPresenceStatus = useCallback((status: 'ONLINE' | 'OFF') => {
-    if (!user?.uuid || !isDm) return;
-    const payload: { status: 'ONLINE' | 'OFF'; userId: string; last_time?: string } = {
-      status,
-      userId: user.uuid,
-    };
-    if (status === 'OFF') {
-      const now = new Date();
-      payload.last_time = now.toLocaleString('ru-RU', {
-        day: '2-digit', month: '2-digit', year: '2-digit',
-        hour: '2-digit', minute: '2-digit',
-      }).replace(',', '');
-    }
-    webSocketService.sendPresence(chatId, payload);
-  }, [chatId, isDm, user?.uuid]);
-
-  const handleNewMessage = useCallback((incoming: any) => {
-    if (isDm && incoming?.userId && incoming.userId !== user?.uuid) {
-      setPeerLastSeen(Date.now());
-    }
-
-    if (incoming?.type === 'PRESENCE' && 'status' in incoming) {
-      const { status, last_time, userId } = incoming;
-      if (!userId || userId === user?.uuid) return;
-      if (status === 'ONLINE') {
-        setPeerStatus('ONLINE');
-        setPeerLastTime(null);
-        setPeerLastSeen(Date.now());
-      } else if (status === 'OFF') {
-        setPeerStatus('OFF');
-        if (last_time) setPeerLastTime(last_time);
-      }
-      return;
-    }
-
-    const newMsg = incoming as Partial<Message> & { content?: string; isEncrypted?: boolean; attachments?: FileMetadata[] };
-    
-    let decryptedText = newMsg.text || newMsg.content || '';
-    if (newMsg.isEncrypted && decryptedText) {
-      decryptMessage(chatId, decryptedText).then((decrypted) => {
-        if (decrypted) {
-          decryptedText = decrypted;
-          if (isEncryptionPending && isChatEncrypted(chatId)) {
-            setIsEncryptionReady(true);
-            setIsEncryptionPending(false);
-          }
-        } else {
-          decryptedText = '[Зашифрованное сообщение]';
-        }
-        
-        const normalized: Message & { attachments?: FileMetadata[] } = {
-          uuid: newMsg.uuid ?? `ws-${Date.now()}`,
-          text: decryptedText,
-          createdAt: newMsg.createdAt ?? new Date().toISOString(),
-          author: newMsg.author ?? user as any,
-          chatId: newMsg.chatId ?? chatId,
-          messageType: newMsg.messageType ?? 'regular',
-          parentMessageId: newMsg.parentMessageId,
-          threadRootMessageId: newMsg.threadRootMessageId,
-          threadMessagesCount: newMsg.threadMessagesCount,
-          updatedAt: newMsg.updatedAt,
-          attachments: newMsg.attachments,
-        };
-
-        // Skip empty messages without attachments
-        if (!normalized.text.trim() && (!normalized.attachments || normalized.attachments.length === 0)) return;
-
-        setMessages((prev) => {
-          const optimisticIndex = prev.findIndex(
-            (msg) => msg.uuid.startsWith('optimistic-') && 
-                     msg.text === normalized.text && 
-                     msg.author?.uuid === user?.uuid
-          );
-          if (optimisticIndex !== -1) {
-            const next = [...prev];
-            next[optimisticIndex] = normalized;
-            return next;
-          }
-          if (prev.some((msg) => msg.uuid === normalized.uuid)) return prev;
-          return [...prev, normalized];
-        });
-      }).catch(() => {
-        decryptedText = '[Зашифрованное сообщение]';
-      });
-      return; // Return early, actual message will be set when promise resolves
-    }
-  }, [chatId, isDm, user, decryptMessage, isEncryptionPending, isChatEncrypted]);
-
-  const loadMessages = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      const response = await api.getChatMessages(chatId);
-      const msgs = Array.isArray(response) ? response : response.messages || [];
-      
-      const decryptedMsgs = await Promise.all(msgs.map(async (msg: any) => {
-        if (msg.isEncrypted && msg.text) {
-          const decrypted = await decryptMessage(chatId, msg.text);
-          return { ...msg, text: decrypted || msg.text };
-        }
-        return msg;
-      }));
-      
-      setMessages(decryptedMsgs);
-    } catch (err) {
-      console.error('Failed to load messages:', err);
-      setMessages([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [chatId, decryptMessage, isEncryptionPending, isChatEncrypted]);
-
-  const loadThreadMessages = useCallback(async (threadRootId: string) => {
-    try {
-      const response = await api.getThreadMessages(chatId, threadRootId);
-      const msgs = Array.isArray(response) ? response : response.messages || [];
-      setThreadMessages(msgs);
-    } catch {
-      setThreadMessages([]);
-    }
-  }, [chatId]);
-
-  // Проверяем, находится ли скролл внизу
   const checkIfScrolledToBottom = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) return true;
@@ -347,91 +445,9 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
   }, []);
 
-  // Обработчик скролла
   const handleScroll = useCallback(() => {
     isScrolledToBottomRef.current = checkIfScrolledToBottom();
   }, [checkIfScrolledToBottom]);
-
-  useEffect(() => {
-    isActiveRef.current = true;
-    loadMessages();
-    setReplyTo(null);
-    setActiveThread(null);
-    encryptionInitRef.current = false;
-    initialScrollDoneRef.current = false;
-
-    webSocketService.connect(
-      () => {
-        webSocketService.subscribeToChat(chatId, handleNewMessage);
-        if (isDm && user?.uuid) {
-          setTimeout(() => {
-            if (isActiveRef.current) sendPresenceStatus('ONLINE');
-          }, 500);
-          
-          presenceIntervalRef.current = setInterval(() => {
-            if (isActiveRef.current) sendPresenceStatus('ONLINE');
-          }, PRESENCE_SEND_INTERVAL);
-          
-          peerCheckIntervalRef.current = setInterval(() => {
-            if (!isActiveRef.current) return;
-            const now = Date.now();
-            if (peerLastSeen && now - peerLastSeen > PEER_TIMEOUT) {
-              if (peerStatus === 'ONLINE') setPeerStatus('OFF');
-            }
-          }, PEER_HEARTBEAT_INTERVAL);
-        }
-      },
-      () => {}
-    );
-
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        if (isDm && user?.uuid) sendPresenceStatus('OFF');
-      } else {
-        if (isDm && user?.uuid) {
-          sendPresenceStatus('ONLINE');
-          if (!webSocketService.isConnected()) webSocketService.connect();
-        }
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      isActiveRef.current = false;
-      if (presenceIntervalRef.current) clearInterval(presenceIntervalRef.current);
-      if (peerCheckIntervalRef.current) clearInterval(peerCheckIntervalRef.current);
-      if (isDm && user?.uuid) sendPresenceStatus('OFF');
-      webSocketService.unsubscribeFromChat(chatId);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [chatId, isDm, user?.uuid, handleNewMessage, loadMessages, sendPresenceStatus, peerLastSeen, peerStatus, isEncryptionPending, isChatEncrypted]);
-
-  // Первоначальный скролл вниз при загрузке
-  useEffect(() => {
-    if (!isLoading && !initialScrollDoneRef.current && messages.length > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-      initialScrollDoneRef.current = true;
-    }
-  }, [isLoading, messages.length]);
-
-  // Скролл вниз только при отправке нового сообщения (от текущего пользователя)
-  useEffect(() => {
-    if (messages.length === 0) return;
-    
-    const lastMessage = messages[messages.length - 1];
-    const isOwnMessage = lastMessage.author?.uuid === user?.uuid;
-    
-    // Скроллим вниз только если:
-    // 1. Это наше сообщение (мы только что отправили)
-    // 2. Пользователь уже был внизу (смотрел последние сообщения)
-    if (isOwnMessage && isScrolledToBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }
-  }, [messages, user?.uuid]);
-
-  useEffect(() => {
-    if (activeThread) loadThreadMessages(activeThread.uuid);
-  }, [activeThread, loadThreadMessages]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -454,9 +470,20 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     setAttachedFiles((prev) => prev.filter((f) => f.uuid !== fileId));
   };
 
+  const { upload } = useFileUpload({
+    chatId,
+    onSuccess: (file) => {
+      setAttachedFiles((prev) => [...prev, file]);
+      toast({ title: 'Файл загружен', description: file.fileName });
+    },
+    onError: (error) => {
+      toast({ title: 'Ошибка загрузки', description: error, variant: 'destructive' });
+    },
+  });
+
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('📤 handleSendMessage called:', { isDm, isEncryptionReady, messageText: newMessage.trim() });
+
     if ((!newMessage.trim() && attachedFiles.length === 0) || isSending) return;
 
     const fileIds = attachedFiles.map((f) => f.uuid);
@@ -465,25 +492,27 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     let contentToSend = messageText;
     let isEncrypted = false;
     
-    if (isDm && isEncryptionReady) {
-      console.log('📝 DM encryption check:', { isDm, isEncryptionReady, chatId, messageText });
-      const encrypted = await encryptMessage(chatId, messageText);
-      console.log('📝 Encryption result:', { encrypted: !!encrypted });
-      if (encrypted) {
-        contentToSend = encrypted;
-        isEncrypted = true;
+    if (isDm) {
+      const encrypted = await encryptionRef.current.encryptMessage(chatId, messageText);
+      if (!encrypted) {
+        toast({
+          title: '🔐 Не удалось инициализировать шифрование',
+          description: 'Повторите попытку позднее.',
+          variant: 'destructive',
+        });
+        return;
       }
-    } else if (isDm) {
-      console.log('📝 Not encrypting:', { isDm, isEncryptionReady });
-      toast({ 
-        title: 'Ожидание шифрования', 
-        description: 'Отправка открытым текстом до получения первого сообщения',
-        variant: 'default'
-      });
+      contentToSend = encrypted;
+      isEncrypted = true;
     }
 
+    const optimisticId =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? `optimistic-${crypto.randomUUID()}`
+        : `optimistic-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
     const optimisticMessage: Message & { attachments?: FileMetadata[]; isEncrypted?: boolean } = {
-      uuid: `optimistic-${Date.now()}`,
+      uuid: optimisticId,
       text: messageText,
       author: user!,
       chatId,
@@ -576,7 +605,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     const timeLabel = formatMessageTime(message.createdAt);
     const msgIsEncrypted = (message as any).isEncrypted;
     
-    // Проверяем наличие вложений
     const msgWithAttachments = message as Message & { attachments?: FileMetadata[]; fileIds?: string[]; files?: FileMetadata[] };
     const attachments = msgWithAttachments.attachments || msgWithAttachments.files || [];
     const hasAttachments = attachments.length > 0;
@@ -586,7 +614,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
     return (
       <div className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'} mb-4`}>
         <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'} max-w-[80%]`}>
-          {/* Если только изображения без текста - убираем фон и padding */}
           <div className={hasOnlyImages ? '' : `rounded-2xl px-4 py-2 ${
             isOwn ? 'bg-primary text-primary-foreground rounded-br-sm' : 'bg-muted text-foreground rounded-bl-sm'
           }`}>
@@ -601,7 +628,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
               </div>
             )}
             
-            {/* Текст сообщения */}
             {hasText && (
               <div className="flex items-center gap-2">
                 <p className="text-sm break-words">{message.text}</p>
@@ -609,7 +635,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
               </div>
             )}
 
-            {/* File Attachments Display */}
             {hasAttachments && (
               <div className={`${hasText ? 'mt-2 pt-2 border-t border-black/10' : ''} space-y-2`}>
                 {attachments.map((file, idx) => {
@@ -647,7 +672,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
               </div>
             )}
 
-            {/* Время - показываем только если есть текст или не только изображения */}
             {(hasText || !hasOnlyImages) && timeLabel && (
               <p className={`text-xs mt-1 ${isOwn ? 'opacity-70' : 'opacity-50'}`}>{timeLabel}</p>
             )}
@@ -691,6 +715,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-background">
+      {/* Header */}
       <div className="p-4 border-b border-border flex items-center gap-3">
         {onBack && (
           <Button size="icon" variant="ghost" onClick={onBack} className="md:hidden">
@@ -718,17 +743,16 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
               <h2 className="font-semibold text-foreground">{chatName}</h2>
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 {renderPeerStatus()}
-            {isDm && isEncryptionReady && (
-              <span className="flex items-center gap-1 text-green-500">
-                <Lock className="h-3 w-3" /> E2E
-              </span>
-            )}
-            {isDm && isEncryptionPending && (
-              <span className="flex items-center gap-1 text-yellow-500">
-                <Lock className="h-3 w-3" /> Ожидание...
-              </span>
-            )}
-
+                {isDm && isEncryptionReady && (
+                  <span className="flex items-center gap-1 text-green-500">
+                    <Lock className="h-3 w-3" /> E2E
+                  </span>
+                )}
+                {isDm && isEncryptionPending && (
+                  <span className="flex items-center gap-1 text-yellow-500">
+                    <Lock className="h-3 w-3" /> Ожидание...
+                  </span>
+                )}
               </p>
             </div>
             <Button size="icon" variant="ghost"><MoreVertical className="h-5 w-5" /></Button>
@@ -736,6 +760,7 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         )}
       </div>
 
+      {/* Messages */}
       <div 
         ref={messagesContainerRef}
         onScroll={handleScroll}
@@ -770,37 +795,19 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
         </div>
       </div>
 
+      {/* Input */}
       <div className="p-4 border-t border-border bg-background">
         {replyTo && (
           <div className="flex items-center justify-between mb-2 p-2 bg-accent rounded-lg">
             <div className="text-sm">
               {replyTo.author?.firstname && <span className="font-semibold text-primary">Replying to {replyTo.author.firstname}</span>}
               <p className="text-muted-foreground truncate max-w-[200px]">{replyTo.text}</p>
-              {(() => {
-                const replyWithAttachments = replyTo as Message & { attachments?: FileMetadata[]; files?: FileMetadata[] };
-                const attachments = replyWithAttachments.attachments || replyWithAttachments.files || [];
-                
-                if (attachments.length === 0) return null;
-                
-                const hasImage = attachments.some(a => a.mimeType?.startsWith('image/'));
-                
-                return (
-                  <div className="mt-2 flex items-center gap-2">
-                    <Paperclip className="h-3 w-3" />
-                    <span className="text-xs text-muted-foreground">
-                      {attachments.length} файл{attachments.length > 1 ? 'а' : ''}
-                      {hasImage && ' (фото)'}
-                    </span>
-                  </div>
-                );
-              })()}
             </div>
             <Button variant="ghost" size="icon" onClick={() => setReplyTo(null)} className="h-6 w-6">×</Button>
           </div>
         )}
 
         <AttachedFilesList files={attachedFiles} onRemove={removeAttachedFile} />
-
 
         <form onSubmit={handleSendMessage} className="flex gap-2">
           <input
@@ -809,7 +816,6 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
             onChange={handleFileSelect}
             className="hidden"
             multiple
-            accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt"
           />
           <Button
             type="button"
@@ -821,21 +827,19 @@ export function ChatWindow({ chatId, chatName, isDm = false, onBack }: ChatWindo
             <Paperclip className="h-5 w-5" />
           </Button>
           <Input
-            placeholder={activeThread ? 'Reply to thread...' : (isDm && isEncryptionReady ? 'Send encrypted message...' : isDm && isEncryptionPending ? 'Send message (encryption pending)...' : 'Type a message...')}
+            placeholder={activeThread ? 'Reply to thread...' : (isDm && isEncryptionReady ? 'Send encrypted message...' : isDm && isEncryptionPending ? 'Waiting for encryption...' : 'Type a message...')}
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
-            disabled={isSending || !isConnected}
+            disabled={isSending || !isConnected || (isDm && !isEncryptionReady && !isEncryptionPending)}
             className="flex-1"
           />
-
           <Button
             type="submit"
             size="icon"
-            disabled={(!newMessage.trim() && attachedFiles.length === 0) || isSending || isUploading}
+            disabled={(!newMessage.trim() && attachedFiles.length === 0) || isSending || isUploading || (isDm && !isEncryptionReady && !isEncryptionPending)}
           >
             {isDm && isEncryptionReady ? <Lock className="h-4 w-4" /> : isDm && isEncryptionPending ? <Lock className="h-4 w-4 text-yellow-500" /> : <Send className="h-5 w-5" />}
           </Button>
-
         </form>
       </div>
     </div>

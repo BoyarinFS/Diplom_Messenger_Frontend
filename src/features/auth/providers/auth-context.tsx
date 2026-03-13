@@ -72,7 +72,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [verificationEmail, setVerificationEmail] = useState('');
   const [hasEncryptionKeys, setHasEncryptionKeys] = useState(false);
 
-  // Check for existing keys on mount
   useEffect(() => {
     const checkKeys = async () => {
       try {
@@ -131,7 +130,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(userData);
     localStorage.setItem(USER_KEY, JSON.stringify(userData));
 
-    // Handle encryption keys if present
     console.log('handleLoginSuccess - accountKeysResponse:', response.accountKeysResponse);
     if (response.accountKeysResponse && password) {
       try {
@@ -142,29 +140,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
         console.log('Encrypted keys object:', encryptedKeys);
         
-        // Try to decrypt to verify password is correct
         await signalProtocol.decryptPrivateKeys(encryptedKeys, password);
         console.log('Keys decrypted successfully');
         
-        // Save to storage
         console.log('Saving to keyStorage...');
         await keyStorage.saveEncryptedKeys(encryptedKeys);
         console.log('Saved to keyStorage successfully');
+        
+        if (response.accountKeysResponse.identityPublicKey && response.accountKeysResponse.signedPreKeyPublic) {
+          // Properly decode base64 to binary
+          const decodeBase64 = (base64: string): Uint8Array => {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+              bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+          };
+          
+          const identityPublicKeyArray = decodeBase64(response.accountKeysResponse.identityPublicKey);
+          const signedPreKeyPublicArray = decodeBase64(response.accountKeysResponse.signedPreKeyPublic);
+          
+          await keyStorage.savePublicKeys({
+            identityPublicKey: identityPublicKeyArray.buffer as ArrayBuffer,
+            signedPreKeyPublic: signedPreKeyPublicArray.buffer as ArrayBuffer,
+          });
+          console.log('Saved public keys to storage');
+        }
+        
         setHasEncryptionKeys(true);
         
-        // Verify they were saved
         const verifyKeys = await keyStorage.getEncryptedKeys();
         console.log('Verified keys in storage:', verifyKeys ? 'found' : 'not found');
 
-        // Сохраняем пароль в sessionStorage для авто-восстановления при перезагрузке
         try {
           sessionStorage.setItem('user_password', password);
-          console.log('Password saved to sessionStorage');
+          console.log('✅ Password saved to sessionStorage for encryption');
         } catch (e) {
-          console.warn('Could not save password to sessionStorage:', e);
+          console.error('❌ Could not save password to sessionStorage:', e);
         }
 
-        // Dispatch event для инициализации расшифрованных ключей в EncryptionContext
         window.dispatchEvent(new CustomEvent('encryption:login', { detail: { password } }));
       } catch (error) {
         console.error('Failed to decrypt/save encryption keys:', error);
@@ -201,14 +216,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     
     try {
-      // Generate encryption keys
-      const { keyBundleRequest, encryptedPrivateKeys } = await signalProtocol.generateKeyBundle(data.password);
+      const { keyBundleRequest, encryptedPrivateKeys, rawKeys } = await signalProtocol.generateKeyBundle(data.password);
       
-      // Save keys locally first
       await keyStorage.saveEncryptedKeys(encryptedPrivateKeys);
+      await keyStorage.savePublicKeys({
+        identityPublicKey: rawKeys.identityKeyPair.publicKey.buffer as ArrayBuffer,
+        signedPreKeyPublic: rawKeys.signedPreKeyPair.publicKey.buffer as ArrayBuffer,
+      });
       setHasEncryptionKeys(true);
       
-      // Register with keys
       const response = await api.registerWithKeys({
         username: data.username,
         email: data.email,
@@ -261,14 +277,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
-      // Dispatch logout event перед очисткой
       window.dispatchEvent(new CustomEvent('encryption:logout'));
       
       setUser(null);
       setHasEncryptionKeys(false);
       localStorage.removeItem(OAUTH_USER_KEY);
       localStorage.removeItem(USER_KEY);
-      // Очищаем пароль из sessionStorage
       try {
         sessionStorage.removeItem('user_password');
       } catch (e) {}

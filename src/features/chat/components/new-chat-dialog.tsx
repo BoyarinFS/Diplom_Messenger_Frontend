@@ -102,11 +102,11 @@ export function NewChatDialog({
       }
 
       // 2. Инициализируем шифрование с ключами из ответа сервера
-      // Используем isCreator из ответа сервера, чтобы определить роль (Alice/Bob)
-      const encryptionInitialized = await initializeDmEncryption(response, response.isCreator);
+      // Сессия создаётся автоматически при наличии ключей получателя
+      const encryptionInitialized = await initializeDmEncryption(response);
       
       if (encryptionInitialized) {
-        console.log(`✅ Encryption initialized for DM chat (${response.isCreator ? 'Alice - creator' : 'Bob - receiver'})`);
+        console.log(`✅ Encryption initialized for DM chat`);
       } else {
         console.warn('⚠️ Failed to initialize encryption for DM chat');
         // Продолжаем без шифрования или показываем предупреждение

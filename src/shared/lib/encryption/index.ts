@@ -1,8 +1,8 @@
 // Signal Protocol Encryption Module
 export { SignalProtocolManager, signalProtocol, getSignalProtocol } from './signal-protocol';
-export { X3DH } from './x3dh';
-export { DoubleRatchet } from './double-ratchet';
+export { DoubleRatchet, X3DH } from './double-ratchet';
 export { keyStorage } from './key-storage';
+export { chatSession } from './chat-session';
 export type {
   KeyBundleRequest,
   RegistrationRequestWithKeys,
@@ -13,4 +13,6 @@ export type {
   CryptoSession,
 } from './types';
 export type { X3DHResult } from './x3dh';
-export type { RatchetSession } from './double-ratchet';
+export type { RatchetSession, RatchetState } from './double-ratchet';
+export type { ChatSession, DecryptedKeyBundle } from './chat-session';
+
