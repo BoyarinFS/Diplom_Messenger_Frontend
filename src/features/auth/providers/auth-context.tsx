@@ -1,16 +1,8 @@
 'use client';
 
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  type ReactNode,
-} from 'react';
+import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import { api } from '@/shared/api';
-import { signalProtocol, keyStorage } from '@/shared/lib/encryption';
 import type { Account, AuthResponse } from '@/shared/types';
-import type { EncryptedPrivateKeys } from '@/shared/lib/encryption';
 
 interface AuthContextType {
   user: Account | null;
@@ -36,21 +28,10 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const OAUTH_USER_KEY = 'oauth_user';
 const USER_KEY = 'user';
 
 const getInitialUser = (): Account | null => {
   if (typeof window === 'undefined') return null;
-  
-  const oauthUser = localStorage.getItem(OAUTH_USER_KEY);
-  if (oauthUser) {
-    try {
-      return JSON.parse(oauthUser);
-    } catch {
-      localStorage.removeItem(OAUTH_USER_KEY);
-      return null;
-    }
-  }
   
   const user = localStorage.getItem(USER_KEY);
   if (user) {
@@ -73,39 +54,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [hasEncryptionKeys, setHasEncryptionKeys] = useState(false);
 
   useEffect(() => {
-    const checkKeys = async () => {
-      try {
-        const keys = await keyStorage.getEncryptedKeys();
-        setHasEncryptionKeys(!!keys);
-      } catch (error) {
-        console.error('Failed to check encryption keys:', error);
-        setHasEncryptionKeys(false);
-      }
-    };
-
     const checkSession = async () => {
       try {
-        const oauthUser = localStorage.getItem(OAUTH_USER_KEY);
-        if (oauthUser) {
-          try {
-            const userData = JSON.parse(oauthUser);
-            setUser(userData);
-            if (userData.status === 'PENDING_VERIFICATION') {
-              setVerificationEmail(userData.email);
-              setShowVerificationDialog(true);
-            }
-          } catch {
-            localStorage.removeItem(OAUTH_USER_KEY);
-          }
-        }
-      } finally {
         setIsInitialized(true);
+      } finally {
         setIsLoading(false);
       }
     };
 
     if (typeof window !== 'undefined') {
-      checkKeys();
       checkSession();
     }
   }, []);
@@ -129,66 +86,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     
     setUser(userData);
     localStorage.setItem(USER_KEY, JSON.stringify(userData));
-
-    console.log('handleLoginSuccess - accountKeysResponse:', response.accountKeysResponse);
-    if (response.accountKeysResponse && password) {
-      try {
-        const encryptedKeys: EncryptedPrivateKeys = {
-          identityPrivateKey: response.accountKeysResponse.identityPrivateKey,
-          signedPreKeyPrivate: response.accountKeysResponse.signedPreKeyPrivate,
-          oneTimePreKeys: [],
-        };
-        console.log('Encrypted keys object:', encryptedKeys);
-        
-        await signalProtocol.decryptPrivateKeys(encryptedKeys, password);
-        console.log('Keys decrypted successfully');
-        
-        console.log('Saving to keyStorage...');
-        await keyStorage.saveEncryptedKeys(encryptedKeys);
-        console.log('Saved to keyStorage successfully');
-        
-        if (response.accountKeysResponse.identityPublicKey && response.accountKeysResponse.signedPreKeyPublic) {
-          // Properly decode base64 to binary
-          const decodeBase64 = (base64: string): Uint8Array => {
-            const binary = atob(base64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) {
-              bytes[i] = binary.charCodeAt(i);
-            }
-            return bytes;
-          };
-          
-          const identityPublicKeyArray = decodeBase64(response.accountKeysResponse.identityPublicKey);
-          const signedPreKeyPublicArray = decodeBase64(response.accountKeysResponse.signedPreKeyPublic);
-          
-          await keyStorage.savePublicKeys({
-            identityPublicKey: identityPublicKeyArray.buffer as ArrayBuffer,
-            signedPreKeyPublic: signedPreKeyPublicArray.buffer as ArrayBuffer,
-          });
-          console.log('Saved public keys to storage');
-        }
-        
-        setHasEncryptionKeys(true);
-        
-        const verifyKeys = await keyStorage.getEncryptedKeys();
-        console.log('Verified keys in storage:', verifyKeys ? 'found' : 'not found');
-
-        try {
-          sessionStorage.setItem('user_password', password);
-          console.log('✅ Password saved to sessionStorage for encryption');
-        } catch (e) {
-          console.error('❌ Could not save password to sessionStorage:', e);
-        }
-
-        window.dispatchEvent(new CustomEvent('encryption:login', { detail: { password } }));
-      } catch (error) {
-        console.error('Failed to decrypt/save encryption keys:', error);
-        setHasEncryptionKeys(false);
-      }
-    } else {
-      console.log('No encryption keys in response or no password');
-      setHasEncryptionKeys(false);
-    }
 
     if (response.status === 'PENDING_VERIFICATION') {
       setVerificationEmail(response.email);
@@ -216,27 +113,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     
     try {
-      const { keyBundleRequest, encryptedPrivateKeys, rawKeys } = await signalProtocol.generateKeyBundle(data.password);
+      const { SignalProtocol, keyStorage } = await import('@/shared/lib/encryption');
+      const { bundleRequest, encryptedKeys } = await SignalProtocol.generateKeyBundle(data.password);
       
-      await keyStorage.saveEncryptedKeys(encryptedPrivateKeys);
-      await keyStorage.savePublicKeys({
-        identityPublicKey: rawKeys.identityKeyPair.publicKey.buffer as ArrayBuffer,
-        signedPreKeyPublic: rawKeys.signedPreKeyPair.publicKey.buffer as ArrayBuffer,
+      console.log('📦 Generated keys:', {
+        publicKeys: Object.keys(bundleRequest),
+        encryptedPrivateKeys: Object.keys(encryptedKeys)
       });
-      setHasEncryptionKeys(true);
       
-      const response = await api.registerWithKeys({
+      // 1. Сохраняем зашифрованные ключи локально
+      await keyStorage.saveEncryptedKeys(encryptedKeys);
+      
+      // 2. Отправляем на сервер И публичные, И зашифрованные приватные ключи
+      const response = await api.register({
         username: data.username,
         email: data.email,
         password: data.password,
         firstname: data.firstname,
         lastname: data.lastname,
-        about: '',
-        keyBundleRequest,
+        keyBundleRequest: {
+          // Публичные ключи
+          identityPublicKey: bundleRequest.identityPublicKey,
+          signedPreKeyPublic: bundleRequest.signedPreKeyPublic,
+          signedPreKeySignature: bundleRequest.signedPreKeySignature,
+          oneTimePreKeys: bundleRequest.oneTimePreKeys,
+          // Зашифрованные приватные ключи (для синхронизации)
+          identityPrivateKey: encryptedKeys.identityPrivateKey,
+          signedPreKeyPrivate: encryptedKeys.signedPreKeyPrivate,
+          preKeys: encryptedKeys.preKeys,
+        }
       });
 
+      window.dispatchEvent(new CustomEvent('encryption:login', { 
+        detail: { password: data.password } 
+      }));
+      
       await handleLoginSuccess(response, data.password);
-    } catch (err: any) {
+      
+    } catch (err) {
       console.error('Registration failed:', err);
       throw err;
     } finally {
@@ -281,13 +195,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       setUser(null);
       setHasEncryptionKeys(false);
-      localStorage.removeItem(OAUTH_USER_KEY);
       localStorage.removeItem(USER_KEY);
+      
       try {
         sessionStorage.removeItem('user_password');
       } catch (e) {}
-      await keyStorage.clearKeys();
-      await keyStorage.clearAllSessions();
+      
+      try {
+        const { keyStorage } = await import('@/shared/lib/encryption');
+        await keyStorage.clearAll();
+      } catch (e) {
+        console.warn('Could not clear encryption storage');
+      }
+      
       setIsLoading(false);
     }
   };
@@ -303,7 +223,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error('Failed to set OAuth token');
     }
 
-    localStorage.setItem(OAUTH_USER_KEY, JSON.stringify(userData));
+    localStorage.setItem(USER_KEY, JSON.stringify(userData));
     setUser(userData);
   };
 

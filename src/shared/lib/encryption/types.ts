@@ -1,84 +1,36 @@
+// Убираем импорты из библиотеки, используем any для типов
 export interface KeyBundleRequest {
-  identityPublicKey: string;
-  identityPrivateKey: string;
-  signedPreKeyPublic: string;
-  signedPreKeyPrivate: string;
-  signedPreKeySignature: string;
-  oneTimePreKeys: string[];
+  registrationId: number;
+  identityPublicKey: string;      // base64
+  signedPreKeyPublic: string;     // base64
+  signedPreKeySignature: string;  // base64
+  oneTimePreKeys: string[];       // base64 array
 }
 
-export interface RegistrationRequestWithKeys {
-  username: string;
-  email: string;
-  password: string;
-  firstname: string;
-  lastname: string;
-  about?: string;
-  keyBundleRequest: KeyBundleRequest;
+export interface ReceiverKeys {
+  registrationId: number;
+  identityPublicKey: string;      // base64
+  signedPreKeyPublic: string;     // base64
+  signedPreKeySignature: string;  // base64
+  oneTimePreKey?: string;         // base64
 }
 
 export interface EncryptedPrivateKeys {
-  identityPrivateKey: string;
-  signedPreKeyPrivate: string;
-  oneTimePreKeys: string[];
+  identityPrivateKey: string;     // base64 (AES-GCM encrypted)
+  signedPreKeyPrivate: string;    // base64 (AES-GCM encrypted)
+  preKeys: string[];              // base64 array (AES-GCM encrypted)
 }
 
-export interface PublicKeyBundle {
-  identityPublicKey: string;
-  signedPreKeyPublic: string;
-  signedPreKeySignature: string;
-  oneTimePreKeys: string[];
+export interface DecryptedKeyBundle {
+  identityKeyPair: any;  // Signal.IdentityKeyPair
+  signedPreKey: any;     // Signal.PrivateKey
+  preKeys: any[];        // Signal.PrivateKey[]
+  registrationId: number;
 }
 
-export interface UserKeyBundle {
-  identityKeyPair: {
-    publicKey: Uint8Array;
-    privateKey: Uint8Array;
-  };
-  signedPreKeyPair: {
-    publicKey: Uint8Array;
-    privateKey: Uint8Array;
-  };
-  signedPreKeySignature: Uint8Array;
-  oneTimePreKeys: Array<{
-    id: number;
-    publicKey: Uint8Array;
-    privateKey: Uint8Array;
-  }>;
-}
-
-export interface CryptoSession {
+export interface StoredSessionRecord {
   chatId: string;
-  rootKey: Uint8Array;
-  sendingChainKey: Uint8Array;
-  receivingChainKey: Uint8Array;
-  sendingMessageNumber: number;
-  receivingMessageNumber: number;
-  recipientPublicKey?: Uint8Array;
-  groupKey?: Uint8Array;
-  createdAt: number;
+  record: string;  // base64(SessionRecord.serialize())
+  version: number;
   updatedAt: number;
-}
-
-export interface EncryptedMessage {
-  ciphertext: string;
-  iv: string;
-  hmac: string;
-  ephemeralPublicKey?: string;
-  messageNumber?: number;
-  keyId?: string;
-}
-
-export interface EncryptedKeyResponse {
-  identityPrivateKey: string;
-  signedPreKeyPrivate: string;
-  oneTimePreKeys: string[];
-}
-
-export interface RecipientPublicKeys {
-  identityKey: string;
-  signedPreKey: string;
-  signedPreKeySignature: string;
-  oneTimePreKey?: string;
-  oneTimePreKeyId?: number;
 }

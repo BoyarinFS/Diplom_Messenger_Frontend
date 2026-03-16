@@ -1,18 +1,10 @@
-// Signal Protocol Encryption Module
-export { SignalProtocolManager, signalProtocol, getSignalProtocol } from './signal-protocol';
-export { DoubleRatchet, X3DH } from './double-ratchet';
+export { SignalProtocol } from './signal-protocol';
+export { SessionManager } from './session-manager';
 export { keyStorage } from './key-storage';
-export { chatSession } from './chat-session';
-export type {
+export type { 
+  EncryptedPrivateKeys, 
+  DecryptedKeyBundle,
   KeyBundleRequest,
-  RegistrationRequestWithKeys,
-  UserKeyBundle,
-  EncryptedPrivateKeys,
-  PublicKeyBundle,
-  EncryptedMessage,
-  CryptoSession,
+  ReceiverKeys,
+  StoredSessionRecord
 } from './types';
-export type { X3DHResult } from './x3dh';
-export type { RatchetSession, RatchetState } from './double-ratchet';
-export type { ChatSession, DecryptedKeyBundle } from './chat-session';
-

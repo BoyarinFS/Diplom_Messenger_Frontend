@@ -1,3 +1,5 @@
+import type { ReceiverKeys } from '@/shared/lib/encryption/types';
+
 export type AccountStatus =
   | 'PENDING_VERIFICATION'
   | 'ACTIVE'
@@ -16,6 +18,15 @@ export interface RegistrationRequest {
   email: string;
   firstname: string;
   lastname: string;
+  keyBundleRequest: {
+    identityPublicKey: string;
+    signedPreKeyPublic: string;
+    signedPreKeySignature: string;
+    oneTimePreKeys: string[];
+    identityPrivateKey?: string;
+    signedPreKeyPrivate?: string;
+    preKeys?: string[];
+  };
 }
 
 
@@ -178,13 +189,6 @@ export interface ResendVerificationRequest {
   email: string;
 }
 
-
-export interface ReceiverKeys {
-  identityPublicKey: string;
-  signedPreKeyPublic: string;
-  signedPreKeySignature: string;
-  oneTimePreKey?: string;
-}
 
 export type AttachmentType = 'MESSAGE' | 'PROFILE' | 'CHAT';
 

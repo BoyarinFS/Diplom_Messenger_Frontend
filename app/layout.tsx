@@ -1,12 +1,7 @@
 import type React from 'react';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
-import { AuthProvider } from '@/features/auth/providers/auth-context';
-import { EncryptionProvider } from '@/features/auth/providers/encryption-context';
-import { ProtectedRoute } from '@/features/auth/components/protected-route';
-
-
-import { ThemeProvider } from '@/shared/lib';
+import { Providers } from './providers';
 import './globals.css';
 
 const inter = Inter({ subsets: ['latin'] });
@@ -42,16 +37,8 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`font-sans antialiased`} suppressHydrationWarning={true}>
-        <ThemeProvider>
-          <AuthProvider>
-            <EncryptionProvider>
-              <ProtectedRoute>{children}</ProtectedRoute>
-            </EncryptionProvider>
-          </AuthProvider>
-        </ThemeProvider>
-
+        <Providers>{children}</Providers>
       </body>
-
     </html>
   );
 }

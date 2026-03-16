@@ -26,7 +26,6 @@ import type {
   AttachmentType,
   DownloadUrlResponse,
 } from '@/shared/types';
-import type { RegistrationRequestWithKeys } from '@/shared/lib/encryption';
 
 
 const pendingRequests = new Map<string, Promise<unknown>>();
@@ -160,7 +159,7 @@ class ApiClient {
     return res.json();
   }
 
-  async registerWithKeys(data: RegistrationRequestWithKeys): Promise<AuthResponse> {
+  async registerWithKeys(data: RegistrationRequest): Promise<AuthResponse> {
     const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: this.baseHeaders,
