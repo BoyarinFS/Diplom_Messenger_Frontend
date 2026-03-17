@@ -22,13 +22,19 @@ export interface SignalProtocolStore {
 export class SignalProtocolStoreImpl implements SignalProtocolStore {
   private sessions: Map<string, any> = new Map();
   private preKeys: Map<number, any> = new Map();
+  private signedPreKey: any;
   private identityKeyPair: any;
   private registrationId: number;
 
   constructor(bundle: DecryptedKeyBundle) {
     this.identityKeyPair = bundle.identityKeyPair;
+    this.signedPreKey = bundle.signedPreKey;
     this.registrationId = bundle.registrationId;
-    this.preKeys = new Map();
+
+    bundle.preKeys.forEach((preKey, index) => {
+      const keyId = index + 1;
+      this.preKeys.set(keyId, preKey);
+    });
   }
 
   async loadSession(identifier: string): Promise<any | null> {
@@ -52,15 +58,21 @@ export class SignalProtocolStoreImpl implements SignalProtocolStore {
 
   async storeSession(identifier: string, record: any): Promise<void> {
     this.sessions.set(identifier, record);
-    
+
     const chatId = identifier.split(':')[0];
+    let bytes: Uint8Array;
+
     if (record instanceof Uint8Array) {
-      await keyStorage.saveSessionRecord(chatId, record);
+      bytes = record;
+    } else if (record && typeof record.serialize === 'function') {
+      bytes = record.serialize();
+    } else if (ArrayBuffer.isView(record)) {
+      bytes = new Uint8Array(record.buffer, record.byteOffset, record.byteLength);
     } else {
-      const serialized = JSON.stringify(record);
-      const bytes = new TextEncoder().encode(serialized);
-      await keyStorage.saveSessionRecord(chatId, bytes);
+      bytes = new Uint8Array(record);
     }
+
+    await keyStorage.saveSessionRecord(chatId, bytes);
   }
 
   async getIdentityKeyPair(): Promise<any> {
@@ -101,10 +113,17 @@ export class SignalProtocolStoreImpl implements SignalProtocolStore {
   }
 
   async loadSignedPreKey(keyId: number): Promise<any> {
-    throw new Error('SignedPreKey not implemented');
+    if (!this.signedPreKey) {
+      throw new Error('SignedPreKey not found');
+    }
+    return this.signedPreKey;
   }
 
-  async storeSignedPreKey(keyId: number, record: any): Promise<void> {}
+  async storeSignedPreKey(keyId: number, record: any): Promise<void> {
+    this.signedPreKey = record;
+  }
 
-  async removeSignedPreKey(keyId: number): Promise<void> {}
+  async removeSignedPreKey(keyId: number): Promise<void> {
+    this.signedPreKey = null;
+  }
 }

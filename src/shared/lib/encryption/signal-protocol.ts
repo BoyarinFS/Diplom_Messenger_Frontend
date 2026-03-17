@@ -1,9 +1,4 @@
-// Временно используем require для диагностики
 const Signal = require('@privacyresearch/libsignal-protocol-typescript');
-
-// Посмотрим, что внутри
-console.log('Signal exports:', Object.keys(Signal));
-console.log('Signal type:', typeof Signal);
 
 import type { EncryptedPrivateKeys, KeyBundleRequest } from './types';
 
@@ -12,21 +7,13 @@ export class SignalProtocol {
     bundleRequest: KeyBundleRequest;
     encryptedKeys: EncryptedPrivateKeys;
   }> {
-    console.log('🔑 Starting key generation...');
-    
-    // Проверим, как именно нужно получать KeyHelper
-    console.log('Signal available:', !!Signal);
-    
-    // Возможно KeyHelper доступен через Signal.default или Signal.KeyHelper
     const KeyHelper = Signal.KeyHelper || (Signal.default && Signal.default.KeyHelper);
-    console.log('KeyHelper found:', !!KeyHelper);
-    
+
     if (!KeyHelper) {
       throw new Error('KeyHelper not found in Signal library. Exports: ' + Object.keys(Signal).join(', '));
     }
-    
+
     const registrationId = KeyHelper.generateRegistrationId();
-    console.log('registrationId:', registrationId);
     
     const identityKeyPair = await KeyHelper.generateIdentityKeyPair();
     
@@ -59,6 +46,7 @@ export class SignalProtocol {
     };
 
     const encryptedKeys = await SignalProtocol.encryptPrivateKeys(privateKeys, password);
+    encryptedKeys.registrationId = registrationId;
 
     return { bundleRequest, encryptedKeys };
   }
@@ -67,21 +55,23 @@ export class SignalProtocol {
     keys: { identityPrivateKey: Uint8Array; signedPreKeyPrivate: Uint8Array; preKeys: Uint8Array[] },
     password: string
   ): Promise<EncryptedPrivateKeys> {
-    const key = await SignalProtocol.deriveKeyFromPassword(password);
-    
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const key = await SignalProtocol.deriveKeyFromPassword(password, salt);
+
     const encrypt = async (data: Uint8Array): Promise<string> => {
       const iv = crypto.getRandomValues(new Uint8Array(12));
-      
+
       const dataCopy = new Uint8Array(data);
       const encrypted = await crypto.subtle.encrypt(
         { name: 'AES-GCM', iv },
         key,
         dataCopy
       );
-      
-      const combined = new Uint8Array(iv.length + encrypted.byteLength);
-      combined.set(iv, 0);
-      combined.set(new Uint8Array(encrypted), iv.length);
+
+      const combined = new Uint8Array(salt.length + iv.length + encrypted.byteLength);
+      combined.set(salt, 0);
+      combined.set(iv, salt.length);
+      combined.set(new Uint8Array(encrypted), salt.length + iv.length);
       return SignalProtocol.arrayToBase64(combined);
     };
 
@@ -100,20 +90,21 @@ export class SignalProtocol {
     signedPreKeyPrivate: Uint8Array;
     preKeys: Uint8Array[];
   }> {
-    const key = await SignalProtocol.deriveKeyFromPassword(password);
-    
     const decrypt = async (encryptedBase64: string): Promise<Uint8Array> => {
       const data = SignalProtocol.base64ToArray(encryptedBase64);
-      const iv = data.slice(0, 12);
-      const ciphertext = data.slice(12);
-      
+      const salt = data.slice(0, 16);
+      const iv = data.slice(16, 28);
+      const ciphertext = data.slice(28);
+
+      const key = await SignalProtocol.deriveKeyFromPassword(password, salt);
+
       const ciphertextCopy = new Uint8Array(ciphertext);
       const decrypted = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv },
         key,
         ciphertextCopy
       );
-      
+
       return new Uint8Array(decrypted);
     };
 
@@ -124,11 +115,10 @@ export class SignalProtocol {
     };
   }
 
-  private static async deriveKeyFromPassword(password: string): Promise<CryptoKey> {
+  private static async deriveKeyFromPassword(password: string, salt: Uint8Array): Promise<CryptoKey> {
     const encoder = new TextEncoder();
     const passwordData = encoder.encode(password);
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    
+
     const passwordCopy = new Uint8Array(passwordData);
     const keyMaterial = await crypto.subtle.importKey(
       'raw',

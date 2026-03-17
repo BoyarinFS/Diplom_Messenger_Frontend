@@ -16,6 +16,7 @@ export interface ReceiverKeys {
 }
 
 export interface EncryptedPrivateKeys {
+  registrationId?: number;
   identityPrivateKey: string;     // base64 (AES-GCM encrypted)
   signedPreKeyPrivate: string;    // base64 (AES-GCM encrypted)
   preKeys: string[];              // base64 array (AES-GCM encrypted)

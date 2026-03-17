@@ -83,9 +83,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       createdAt: new Date().toISOString(),
       status: response.status,
     };
-    
+
     setUser(userData);
     localStorage.setItem(USER_KEY, JSON.stringify(userData));
+
+    if (password && response.accountKeysResponse) {
+      try {
+        const { keyStorage } = await import('@/shared/lib/encryption');
+        await keyStorage.saveEncryptedKeys({
+          identityPrivateKey: response.accountKeysResponse.identityPrivateKey,
+          signedPreKeyPrivate: response.accountKeysResponse.signedPreKeyPrivate,
+          preKeys: [],
+        });
+
+        sessionStorage.setItem('user_password', password);
+
+        window.dispatchEvent(new CustomEvent('encryption:login', {
+          detail: { password }
+        }));
+      } catch (err) {
+        console.error('Failed to restore encryption keys:', err);
+      }
+    }
 
     if (response.status === 'PENDING_VERIFICATION') {
       setVerificationEmail(response.email);
@@ -111,20 +130,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     lastname: string;
   }) => {
     setIsLoading(true);
-    
+
     try {
-      const { SignalProtocol, keyStorage } = await import('@/shared/lib/encryption');
+      const { SignalProtocol } = await import('@/shared/lib/encryption');
       const { bundleRequest, encryptedKeys } = await SignalProtocol.generateKeyBundle(data.password);
-      
-      console.log('📦 Generated keys:', {
-        publicKeys: Object.keys(bundleRequest),
-        encryptedPrivateKeys: Object.keys(encryptedKeys)
-      });
-      
-      // 1. Сохраняем зашифрованные ключи локально
-      await keyStorage.saveEncryptedKeys(encryptedKeys);
-      
-      // 2. Отправляем на сервер И публичные, И зашифрованные приватные ключи
+
       const response = await api.register({
         username: data.username,
         email: data.email,
@@ -132,24 +142,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         firstname: data.firstname,
         lastname: data.lastname,
         keyBundleRequest: {
-          // Публичные ключи
           identityPublicKey: bundleRequest.identityPublicKey,
           signedPreKeyPublic: bundleRequest.signedPreKeyPublic,
           signedPreKeySignature: bundleRequest.signedPreKeySignature,
           oneTimePreKeys: bundleRequest.oneTimePreKeys,
-          // Зашифрованные приватные ключи (для синхронизации)
           identityPrivateKey: encryptedKeys.identityPrivateKey,
           signedPreKeyPrivate: encryptedKeys.signedPreKeyPrivate,
           preKeys: encryptedKeys.preKeys,
         }
       });
 
-      window.dispatchEvent(new CustomEvent('encryption:login', { 
-        detail: { password: data.password } 
+      const { keyStorage } = await import('@/shared/lib/encryption');
+      await keyStorage.saveEncryptedKeys(encryptedKeys);
+
+      sessionStorage.setItem('user_password', data.password);
+
+      window.dispatchEvent(new CustomEvent('encryption:login', {
+        detail: { password: data.password }
       }));
-      
+
       await handleLoginSuccess(response, data.password);
-      
+
     } catch (err) {
       console.error('Registration failed:', err);
       throw err;

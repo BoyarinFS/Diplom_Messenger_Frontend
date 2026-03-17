@@ -1,37 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  webpack: (config, { isServer }) => {
-    // Добавляем поддержку WASM
-    config.experiments = {
-      ...config.experiments,
-      asyncWebAssembly: true,
-      layers: true,
-    };
-
-    // Для клиента игнорируем нативные модули node
-    if (!isServer) {
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        path: false,
-        os: false,
-        crypto: false,
-        stream: false,
-        buffer: false,
-        util: false,
-        assert: false,
-      };
-    }
-
-    // Добавляем rule для WASM файлов
-    config.module.rules.push({
-      test: /\.wasm$/,
-      type: 'webassembly/async',
-    });
-
-    return config;
-  },
-
   output: 'standalone',
   typescript: {
     ignoreBuildErrors: true,
@@ -53,8 +21,35 @@ const nextConfig = {
       '@radix-ui/react-icons',
     ],
   },
-  
-  // Убираем дублирующийся webpack и turbopack
+
+  webpack: (config, { isServer }) => {
+    config.experiments = {
+      ...config.experiments,
+      asyncWebAssembly: true,
+      layers: true,
+    };
+
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        path: false,
+        os: false,
+        crypto: false,
+        stream: false,
+        buffer: false,
+        util: false,
+        assert: false,
+      };
+    }
+
+    config.module.rules.push({
+      test: /\.wasm$/,
+      type: 'webassembly/async',
+    });
+
+    return config;
+  },
 
   async headers() {
     return [

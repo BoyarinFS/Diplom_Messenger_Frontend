@@ -26,8 +26,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
 
     try {
       const { SignalProtocol, keyStorage } = await import('@/shared/lib/encryption');
-      const Signal = await import('@signalapp/libsignal-client');
-      
+
       // Получаем зашифрованные ключи из IndexedDB
       const encryptedKeys = await keyStorage.getEncryptedKeys();
       if (!encryptedKeys) {
@@ -36,22 +35,17 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
 
       // Дешифруем приватные ключи
       const decrypted = await SignalProtocol.decryptPrivateKeys(encryptedKeys, password);
-      
-      // Восстанавливаем объекты libsignal из дешифрованных байтов
-      const identityPrivateKey = Signal.PrivateKey.deserialize(decrypted.identityPrivateKey);
-      const identityKeyPair = new Signal.IdentityKeyPair(
-        identityPrivateKey.getPublicKey(),
-        identityPrivateKey
-      );
-      
-      const signedPreKey = Signal.PrivateKey.deserialize(decrypted.signedPreKeyPrivate);
-      const preKeys = decrypted.preKeys.map(bytes => Signal.PrivateKey.deserialize(bytes));
 
+      // Создаем bundle напрямую из дешифрованных байтов
+      // Библиотека @privacyresearch/libsignal-protocol-typescript работает с сырыми ключами
       const bundle: DecryptedKeyBundle = {
-        identityKeyPair,
-        signedPreKey,
-        preKeys,
-        registrationId: 0, // TODO: Нужно получать из бэкенда при логине
+        identityKeyPair: {
+          pubKey: decrypted.identityPrivateKey,
+          privKey: decrypted.identityPrivateKey,
+        },
+        signedPreKey: decrypted.signedPreKeyPrivate,
+        preKeys: decrypted.preKeys,
+        registrationId: encryptedKeys.registrationId || 0,
       };
 
       setKeyBundle(bundle);
